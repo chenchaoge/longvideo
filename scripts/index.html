@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>动画预览</title>
+<link rel="icon" href="data:,">
+<style>
+  html, body { margin: 0; background: #000; overflow: hidden; }
+  canvas { display: block; }
+  #ui { display: none; }
+  body.preview { display: flex; flex-direction: column; align-items: center; height: 100vh; }
+  body.preview canvas { width: min(100vw, calc((100vh - 64px) * var(--ar))); height: auto; }
+  body.preview #ui { display: block; width: min(100vw, calc((100vh - 64px) * var(--ar))); color: #ccc; font: 14px "Noto Sans SC", sans-serif; }
+  #bar { height: 14px; background: #222; cursor: pointer; margin: 8px 0 6px; }
+  #fill { height: 100%; width: 0; background: #ffd23f; }
+</style>
+</head>
+<body>
+<canvas id="cv" width="1920" height="1080"></canvas>
+<div id="ui"><div id="bar"><div id="fill"></div></div><div id="info">空格 播放/暂停 · ←→ 快退/快进 · 点进度条跳转</div></div>
+<!-- 通用引擎；项目的场景脚本由 main.js 按 project.json 的 scripts 动态加载 -->
+<script src="js/core.js"></script>
+<script src="js/draw.js"></script>
+<script src="js/clip.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>

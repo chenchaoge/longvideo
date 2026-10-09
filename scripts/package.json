@@ -1,0 +1,8 @@
+{
+  "name": "longvideo",
+  "private": true,
+  "license": "MIT",
+  "dependencies": {
+    "playwright-core": "^1.63.0"
+  }
+}
