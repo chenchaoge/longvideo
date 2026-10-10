@@ -27,10 +27,11 @@ function loadClipFrame(id) {
   while (CLIP_CACHE.size > CLIP_CACHE_MAX) CLIP_CACHE.delete(CLIP_CACHE.keys().next().value);
   return p;
 }
-// 渲染 t 秒前调用：把这一帧要用的实机帧都加载好
+// 渲染 t 秒前调用：把这一帧要用的实机帧都加载好，再等场景脚本登记的每帧异步准备（FRAME_PREP）
 function prepareFrame(t) {
   const need = [];
   for (const u of CLIP_USES) if (t >= u.t0 - 1e-3 && t <= u.t1 + 1e-3) need.push(loadClipFrame(`${u.key}/${clipIdx(u.key, u.map(t))}`));
+  for (const f of FRAME_PREP) need.push(f(t));
   return Promise.all(need);
 }
 function clipImg(key, st) {

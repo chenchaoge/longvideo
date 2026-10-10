@@ -5,7 +5,7 @@ const cv = document.getElementById('cv');         // 画布尺寸由 render.mjs 
 const ctx = cv.getContext('2d');
 const W = cv.width, H = cv.height, FPS = 30;
 const PORTRAIT = H > W;                           // 竖版
-const CX = W / 2, CY = PORTRAIT ? 805 : 470;      // 画面内容中心：横版底部留字幕区；竖版是主要内容区 x 140～940、y 250～1360 的中心
+const CX = W / 2, CY = PORTRAIT ? 805 : 460;      // 画面内容中心：横版底部留 160 字幕区、主要内容区 y 0～920 的中心；竖版是主要内容区 x 140～940、y 250～1360 的中心
 document.documentElement.style.setProperty('--ar', W / H);   // 预览页按画面比例缩放
 let DUR = 0;                                      // 成片时长，启动时从项目配置读取（减去 cuts 剪掉的段）
 let TL = null;                                    // 项目配置 project.json
@@ -79,7 +79,9 @@ function parseSRT(txt) {
 }
 
 // ---------- 时间轴元素系统 ----------
+const SETUP = [];                                  // 异步准备（加载模型、贴图、初始化第三方库等），场景脚本加载完、构建前逐个等完
 const PREP = [];                                   // 场景构建前的准备函数
+const FRAME_PREP = [];                             // 每帧异步准备 (t) => Promise：渲染这一帧前等它完成（如把 SVG 转成图片）
 const BUILD = [];                                  // 各场景文件注册的构建函数
 const SCENES = [];                                 // {t0,t1,els,cam}
 const OVER = [];                                   // 顶层元素（不受场景镜头影响，画在所有场景之上）
@@ -115,7 +117,7 @@ function el(o) {
   return e;
 }
 
-// 音效事件：name 是本稿音效脚本（project.json 的 sfx_py）里定义的音效名
+// 音效事件：name 是本稿 project.json 的 sfx_files 或音效脚本 sfx_py 里定义的音效名
 function sfx(name, t, gain = 1, pan = 0) { SFX.push({ name, t: +t.toFixed(4), gain, pan }); }
 // 音频采样事件（直接用现成音频文件，如游戏原声、实机录像原声、录好的台词）：file 为相对用户工作目录的路径
 // o: ss 源文件起点秒  dur 截取时长(null=到结尾)  g 音量  p 声像  fi/fo 淡入淡出秒  rate 变速(同时变调)  norm 先把这段的响度拉到 norm dBFS 再乘 g（响度差很大的录像原声用）

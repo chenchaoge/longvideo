@@ -1,30 +1,34 @@
 # -*- coding: utf-8 -*-
-"""剪映草稿（菜单启动，在用户工作目录里运行）：生成剪映草稿，用户打开就能录音、对字幕，不用自己导入
-草稿建在剪映的草稿目录里，名字 <片名>_配音，重名自动加序号，不覆盖已有草稿
-剪映新版保存后的草稿是加密的，只能新建、读不回来：录好的配音、调好的字幕只能由用户在剪映里导出"""
+"""剪映草稿（菜单启动，在用户工作目录里运行）：生成配音草稿、对齐配音和字幕、成片放进草稿
+剪映草稿有两种做法：
+- 默认：能加解密（菜单 5 检查），Claude 直接读写草稿：菜单 6 文本朗读配音在草稿里直接对齐，菜单 7 成片放进草稿
+- 兜底：加解密用不了，用户配合：菜单 3 用剪映导出的音频和字幕对齐，菜单 4 导回剪映
+草稿建在剪映的草稿目录里，名字 <片名>_配音，重名自动加序号；备份的草稿名 <草稿名>_备份；这一步正常只有这两个草稿"""
 import json
 import os
 import re
-import string
 import sys
 import traceback
-import winreg
 
 import pyJianYingDraft as draft
+
+import jycrypto
+import jydraft
+import tts_align
 
 sys.dont_write_bytecode = True
 WORK = os.getcwd()                                            # 用户工作目录（运行时所在目录）
 ENG = os.path.join(WORK, '工程文件')                            # 与 render.mjs 的 ENG_DIR 一致
 CHECK_FILE = os.path.join(ENG, '开场核对.json')                 # 开场核对结果：要念的稿（voiceScript，没有就用文稿 script）、横竖版
 DRAFT_TAG = '_初版'                                            # 初版 SRT 后缀（与 render.mjs 一致）
-JY_DATA = os.path.join(os.environ.get('LOCALAPPDATA', ''), 'JianyingPro', 'User Data')
-SETTING = os.path.join(JY_DATA, 'Config', 'globalSetting')    # 剪映设置：在「全局设置 → 草稿位置」改过目录才有记录
-DEFAULT_ROOT = os.path.join(JY_DATA, 'Projects', 'com.lveditor.draft')   # 剪映默认草稿目录
-UNINSTALL_KEY = r'Software\Microsoft\Windows\CurrentVersion\Uninstall\JianyingPro'   # 注册表里剪映的安装信息
-DRAFT_MARK = {'draft_meta_info.json', 'draft_content.json'}   # 每个草稿文件夹里都有这两个，全盘找草稿目录就认这个
-SKIP_DIRS = {'windows', '$recycle.bin', 'system volume information', 'node_modules'}   # 全盘找时跳过，另外 . 开头的（剪映回收站、云缓存等）也跳过
 AUDIO_EXT = ('.wav', '.mp3', '.m4a', '.aac', '.flac')
-SIZE = {'横版': (1920, 1080), '竖版': (1080, 1920)}             # 草稿画布
+OUT_VOICE = os.path.join(ENG, '配音.wav')                       # 菜单 3、6 的结果：去掉空白的连续配音
+OUT_SUBS = os.path.join(ENG, '字幕.srt')                        # 菜单 3、6 的结果：按每段配音对齐的字幕
+BACKUP_TAG = '_备份'                                           # 备份原配音草稿的名字后缀
+VIDEO_RE = re.compile(r'(.+)_\d+\.mp4', re.I)                  # 无字幕成片：<片名>_<序号>.mp4（render.mjs 出片的命名）
+START_TOL = 10000                                             # 字幕和配音开头相差这么多微秒以内，算同一句的
+SIZE = {'横版': (1920, 1080), '竖版': (1080, 1920)}            # 草稿画布
+US = jydraft.US
 
 
 def ask(q):
@@ -35,71 +39,16 @@ def ask(q):
         return ''
 
 
-def setting_root():
-    """剪映设置里改过的草稿目录（如 currentCustomDraftPath=D:\\\\xx\\\\JianyingPro Drafts），没改过返回 None"""
-    if not os.path.exists(SETTING):
-        return None
-    with open(SETTING, encoding='utf-8', errors='replace') as f:
-        m = re.search(r'^\w*DraftPath=(.+)$', f.read(), re.M | re.I)
-    return m.group(1).strip().replace('\\\\', '\\') if m else None
-
-
-def install_drive():
-    """剪映装在哪个盘（从注册表的卸载信息里取），取不到返回 None"""
-    for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
-        try:
-            with winreg.OpenKey(hive, UNINSTALL_KEY) as k:
-                s = winreg.QueryValueEx(k, 'UninstallString')[0]
-        except OSError:
-            continue
-        m = re.search(r'([A-Za-z]):\\', s)
-        if m:
-            return m.group(1).upper()
-    return None
-
-
-def search_root():
-    """按草稿特征全盘找草稿目录：先找剪映装的盘，再找别的盘；一个盘里找到就停，有多个取最近用过的"""
-    drives = [d for d in string.ascii_uppercase if os.path.exists(f'{d}:\\')]
-    first = install_drive()
-    if first in drives:
-        drives.remove(first)
-        drives.insert(0, first)
-    for d in drives:
-        print(f'在 {d} 盘找剪映草稿目录…')
-        found = {}                                            # 草稿目录 → 里面草稿最近修改时间
-        for dirpath, dirnames, filenames in os.walk(f'{d}:\\'):
-            if DRAFT_MARK <= set(filenames):                  # dirpath 是一个草稿，它的上一级就是草稿目录
-                root = os.path.dirname(dirpath)
-                found[root] = max(found.get(root, 0), os.path.getmtime(os.path.join(dirpath, 'draft_meta_info.json')))
-                dirnames[:] = []
-                continue
-            dirnames[:] = [n for n in dirnames if n.lower() not in SKIP_DIRS and not n.startswith('.')]
-        if found:
-            for r in found:
-                print(f'  找到：{r}')
-            return max(found, key=found.get)
-    return None
-
-
-def draft_root():
-    """剪映草稿目录：先看剪映设置里改过的目录，再看默认目录，都没有就全盘按草稿特征找"""
-    for how, root in (('剪映设置', setting_root()), ('默认目录', DEFAULT_ROOT)):
-        if root and os.path.isdir(root):
-            print(f'剪映草稿目录（{how}）：{root}')
-            return root
-    root = search_root()
-    if not root:
-        raise SystemExit('全盘都没找到剪映草稿目录：先打开剪映专业版新建一个草稿，再重试')
-    print(f'剪映草稿目录（全盘查找）：{root}')
-    return root
+def read_check():
+    """读开场核对.json"""
+    if not os.path.exists(CHECK_FILE):
+        raise SystemExit(f'当前目录（{WORK}）没有 工程文件/开场核对.json：要在用户工作目录里运行，并先完成开场核对')
+    return json.load(open(CHECK_FILE, encoding='utf-8'))
 
 
 def load_check():
     """读开场核对结果，返回 (初版 SRT 路径, 画布宽, 画布高)"""
-    if not os.path.exists(CHECK_FILE):
-        raise SystemExit(f'当前目录（{WORK}）没有 工程文件/开场核对.json：要在用户工作目录里运行，并先完成开场核对')
-    ck = json.load(open(CHECK_FILE, encoding='utf-8'))
+    ck = read_check()
     src = ck.get('voiceScript') or ck.get('script')              # 与 render.mjs 菜单 9 取稿的规则一致
     if not src:
         raise SystemExit('开场核对记录里没有文稿，无文稿分支不用配音草稿')
@@ -111,55 +60,235 @@ def load_check():
     return srt, *SIZE[ck['orientation']]
 
 
-def pick_audio():
-    """工作目录顶层的配音文件，多个时让选"""
-    fs = sorted(f for f in os.listdir(WORK) if f.lower().endswith(AUDIO_EXT))
-    if not fs:
-        raise SystemExit(f'工作目录顶层没有配音文件（{"、".join(AUDIO_EXT)}）')
-    if len(fs) == 1:
-        return os.path.join(WORK, fs[0])
-    for i, f in enumerate(fs, 1):
+def choose(items, label):
+    """只有一个直接用，多个时列出来让选"""
+    if len(items) == 1:
+        return items[0]
+    for i, f in enumerate(items, 1):
         print(f'  {i}. {f}')
-    k = ask('选配音文件编号: ')
-    if not k.isdigit() or not 1 <= int(k) <= len(fs):
+    k = ask(f'选{label}编号: ')
+    if not k.isdigit() or not 1 <= int(k) <= len(items):
         raise SystemExit('编号无效')
-    return os.path.join(WORK, fs[int(k) - 1])
+    return items[int(k) - 1]
 
 
-def free_name(root, base):
-    """草稿名重名就加序号：<片名>_配音、<片名>_配音2…"""
-    name, n = base, 1
-    while os.path.exists(os.path.join(root, name)):
-        n += 1
-        name = f'{base}{n}'
-    return name
+def top_files(exts):
+    """工作目录顶层某类文件的文件名"""
+    return sorted(f for f in os.listdir(WORK) if f.lower().endswith(exts) and os.path.isfile(os.path.join(WORK, f)))
 
 
-def make_draft(with_audio):
-    srt, w, h = load_check()
-    audio = pick_audio() if with_audio else None
-    root = draft_root()
-    name = free_name(root, os.path.basename(WORK) + '_配音')
+def pick_top(exts, label):
+    """工作目录顶层某类文件（配音、剪映导出的音频或字幕），多个时让选"""
+    fs = top_files(exts)
+    if not fs:
+        raise SystemExit(f'工作目录顶层没有{label}（{"、".join(exts)}）')
+    return os.path.join(WORK, choose(fs, label))
+
+
+def pick_voice_draft(root):
+    """本视频的配音草稿（<片名>_配音 开头、不是备份的），按最近修改排，多个时让选"""
+    base = os.path.basename(WORK) + '_配音'
+    names = sorted((n for n in os.listdir(root) if n.startswith(base) and BACKUP_TAG not in n and os.path.isdir(os.path.join(root, n))),
+                   key=lambda n: -os.path.getmtime(os.path.join(root, n)))
+    if not names:
+        raise SystemExit(f'剪映草稿目录里没有「{base}」开头的配音草稿')
+    return choose(names, '配音草稿')
+
+
+def ask_overwrite():
+    for f in (OUT_VOICE, OUT_SUBS):
+        if os.path.exists(f) and ask(f'{f} 已存在，覆盖吗？（输入 y 覆盖，其他取消）: ') != 'y':
+            raise SystemExit('已取消，什么都没改')
+
+
+def make_draft(srt, w, h, audio=None, root=None, name=None, cues=None):
+    """新建配音草稿：导入字幕，有配音就放到音频轨（给了 cues [(开始, 时长) 微秒] 就按它切成一段一段的）；
+    没给名字就用 <片名>_配音（重名加序号）；返回草稿名"""
+    root = root or jydraft.draft_root()
+    name = name or jydraft.free_name(root, os.path.basename(WORK) + '_配音')
     script = draft.DraftFolder(root).create_draft(name, w, h, fps=30)
     script.import_srt(srt, track_name='字幕')
     if audio:
         mat = draft.AudioMaterial(audio)
         script.append_track(draft.TrackSpec(draft.TrackType.audio, '配音'))
-        script.add_segment(draft.AudioSegment(mat, draft.trange(0, mat.duration)), '配音')
+        for a, n in cues or [(0, mat.duration)]:
+            n = min(n, mat.duration - a)
+            if n > 0:
+                script.add_segment(draft.AudioSegment(mat, draft.trange(a, n), source_timerange=draft.trange(a, n)), '配音')
     script.save()
     print(f'已生成剪映草稿：{name}\n位置：{os.path.join(root, name)}\n字幕：{srt}' + (f'\n配音：{audio}' if audio else ''))
     print('剪映开着的话，回到首页（或重开剪映）草稿列表才会出现')
+    return name
+
+
+def tts_fix():
+    """菜单 3（兜底，加解密用不了时）：文本朗读生成的配音（一条字幕一段，每段从它那条字幕的起点开始），用户导出整条音频和字幕后，
+    按字幕起点量出每句，去掉段与段之间的空白，字幕时长改成和它那段配音一样长"""
+    first = load_check()[0]
+    audio = pick_top(AUDIO_EXT, '剪映导出的音频')
+    if top_files(('.srt',)):
+        srt = pick_top(('.srt',), '剪映导出的字幕')
+    elif ask('工作目录顶层没有剪映导出的字幕：用户确认在剪映里没改过字幕，就输入 y 用初版 SRT，其他退出: ') == 'y':
+        srt = first
+    else:
+        raise SystemExit('没有剪映导出的字幕：先问用户在剪映里改没改过字幕的文字，改过就让用户导出字幕（SRT）到工作目录')
+    subs = tts_align.read_srt(srt)
+    if not subs:
+        raise SystemExit(f'字幕文件里没有字幕：{srt}')
+    print(f'剪映导出的音频：{audio}\n字幕：{srt}（{len(subs)} 条）\n按每条字幕的起点量配音…')
+    res = tts_align.align(audio, [s for s, _, _ in subs])
+    if res['problems']:
+        raise SystemExit('\n'.join(res['problems']) + '\n没有生成配音和字幕')
+    ask_overwrite()
+    os.makedirs(ENG, exist_ok=True)
+    tts_align.write_wav(res, OUT_VOICE)
+    with open(OUT_SUBS, 'w', encoding='utf-8', newline='') as f:
+        f.write(tts_align.to_srt([t for _, _, t in subs], res['cues']))
+    gaps = [g for g in res['gaps'] if g >= 0.001]             # 不到 1 毫秒的是字幕时间取整到毫秒带来的，不算空白
+    print(f'字幕 {len(subs)} 条，配音 {len(subs)} 段，一一对上')
+    print(f'删掉空白 {len(gaps)} 处，共 {sum(gaps):.1f} 秒；配音从 {len(res["pcm"]) / res["sr"]:.1f} 秒变成 {res["cues"][-1][1]:.1f} 秒'
+          if gaps else '空白已经删过了，配音原样')
+    print(f'已生成：{OUT_VOICE}\n已生成：{OUT_SUBS}')
+
+
+def import_back():
+    """菜单 4（兜底）：菜单 3 对齐好的配音和字幕导回配音草稿：原草稿改名成 <草稿名>_备份（不删、不改里面的东西），
+    原名字新建草稿导入，配音按每条字幕切成一段一段的"""
+    w, h = load_check()[1:]
+    for f in (OUT_VOICE, OUT_SUBS):
+        if not os.path.exists(f):
+            raise SystemExit(f'没有 {f}：先跑菜单 3 对齐')
+    root = jydraft.draft_root()
+    name = pick_voice_draft(root)
+    backup = jydraft.free_name(root, name + BACKUP_TAG)
+    try:
+        os.rename(os.path.join(root, name), os.path.join(root, backup))
+    except OSError as e:
+        raise SystemExit(f'草稿「{name}」改不了名（{e}）：剪映里可能还开着它，请用户关掉这个草稿、回到剪映首页再重试')
+    print(f'原草稿已备份：「{name}」→「{backup}」')
+    cues = [(round(s * US), round(e * US) - round(s * US)) for s, e, _ in tts_align.read_srt(OUT_SUBS)]
+    make_draft(OUT_SUBS, w, h, OUT_VOICE, root, name, cues)
+    print(f'草稿「{name}」已换成对齐好的配音和字幕（配音 {len(cues)} 段）')
+
+
+def check_crypto():
+    """菜单 5：检查能不能直接读写剪映草稿：剪映的加解密自检，再解开最近的一个加密草稿看看"""
+    c = jycrypto.JyCrypto()
+    print(f'剪映：{c.dir}\n加解密自检通过')
+    root = jydraft.draft_root()
+    names = sorted((n for n in os.listdir(root) if os.path.isfile(os.path.join(root, n, jydraft.CONTENT))),
+                   key=lambda n: -os.path.getmtime(os.path.join(root, n, jydraft.CONTENT)))
+    for n in names:
+        raw = open(os.path.join(root, n, jydraft.CONTENT), 'rb').read()
+        if raw[:1] not in (b'{', b'['):
+            json.loads(c.decrypt(raw))
+            print(f'最近的加密草稿「{n}」解得开')
+            break
+    else:
+        print('草稿目录里还没有加密过的草稿，只做了自检')
+    print('结论：加解密可用，剪映草稿可以直接读写')
+
+
+def mismatch(subs, voices):
+    """字幕和配音段数对不上：说清哪几条字幕开头没有配音、哪些配音开头没有字幕"""
+    ss, vs = [jydraft.tr(s)[0] for s in subs], [jydraft.tr(v)[0] for v in voices]
+    lack = [i + 1 for i, a in enumerate(ss) if not any(abs(a - b) <= START_TOL for b in vs)]
+    extra = [b for b in vs if not any(abs(a - b) <= START_TOL for a in ss)]
+    msg = f'字幕 {len(subs)} 条，配音 {len(voices)} 段，对不上'
+    if lack:
+        msg += f'：第 {"、".join(map(str, lack))} 条字幕没有配音'
+    if extra:
+        msg += f'；{"、".join(f"{b / US:.2f}" for b in extra)} 秒处的配音没有对应的字幕'
+    return msg + '\n草稿没改'
+
+
+def tts_in_draft():
+    """菜单 6（默认，能加解密时）：文本朗读的配音直接在配音草稿里对齐。一条字幕对一段配音，按顺序一一对应；
+    每段配音的长度直接从草稿里读（已算上倍速），配音段从 0 秒起首尾相接（删掉段与段之间的空白，每段只挪位置、不剪不改，还是一段一段的），
+    字幕的起止改成和它那段配音一样；先备份草稿再改；同时出 工程文件/配音.wav（按草稿位置拼的副本）、字幕.srt（做动画用）"""
+    read_check()
+    jydraft.ensure_closed()
+    root = jydraft.draft_root()
+    name = pick_voice_draft(root)
+    d = jydraft.Draft(os.path.join(root, name))
+    subs, voices = d.segments('text'), d.segments('audio')
+    if not subs:
+        raise SystemExit(f'草稿「{name}」里没有字幕')
+    if len(subs) != len(voices):
+        raise SystemExit(mismatch(subs, voices))
+    t, cues = 0, []
+    for v in voices:                                          # 每段配音的长度就是它在草稿里的长度，从 0 秒起首尾相接
+        n = jydraft.tr(v)[1]
+        cues.append((t, n))
+        t += n
+    old_end = max(sum(jydraft.tr(v)) for v in voices)
+    changed = any(jydraft.tr(s) != c or jydraft.tr(v) != c for s, v, c in zip(subs, voices, cues))
+    ask_overwrite()
+    if changed:
+        bname, made = jydraft.backup(root, name, BACKUP_TAG)
+        print(f'原草稿已备份成「{bname}」' if made else f'已有备份「{bname}」（第一次对齐前的样子），不再备份')
+        for s, v, (a, n) in zip(subs, voices, cues):
+            v['target_timerange'] = {'start': a, 'duration': n}   # 配音只挪位置，长度不变
+            s['target_timerange'] = {'start': a, 'duration': n}
+        d.save()
+    os.makedirs(ENG, exist_ok=True)
+    jydraft.mixdown(d, OUT_VOICE, *d.audio_format())
+    with open(OUT_SUBS, 'w', encoding='utf-8', newline='') as f:
+        f.write(tts_align.to_srt([d.text(s) for s in subs], [(a / US, (a + n) / US) for a, n in cues]))
+    print(f'字幕 {len(subs)} 条，配音 {len(voices)} 段，一一对上，配音还是一段一段的')
+    print(f'删掉段与段之间的空白，配音从 {old_end / US:.1f} 秒变成 {t / US:.1f} 秒；草稿「{name}」已对齐' if changed
+          else f'空白已经删过了，草稿「{name}」没改')
+    print(f'已生成：{OUT_VOICE}\n已生成：{OUT_SUBS}')
+
+
+def video_in():
+    """菜单 7（能加解密时）：工作目录顶层最新的无字幕成片放进配音草稿的视频轨、从 0 秒开始，配音轨静音；
+    视频轨上放着这条视频的旧版成片就换掉"""
+    read_check()
+    jydraft.ensure_closed()
+    vids = [f for f in top_files(('.mp4',)) if VIDEO_RE.fullmatch(f)]
+    if not vids:
+        raise SystemExit('工作目录顶层没有无字幕成片（<片名>_<序号>.mp4）')
+    video = max(vids, key=lambda f: os.path.getmtime(os.path.join(WORK, f)))
+    stem = VIDEO_RE.fullmatch(video).group(1)
+    root = jydraft.draft_root()
+    name = pick_voice_draft(root)
+    d = jydraft.Draft(os.path.join(root, name))
+    dur = jydraft.put_video(d, os.path.join(WORK, video), re.compile(rf'{re.escape(stem)}_\d+\.mp4', re.I))
+    d.save()
+    print(f'成片 {video}（{dur:.1f} 秒）已放进草稿「{name}」的视频轨、从 0 秒开始；音频轨已静音')
+
+
+def check_install():
+    """菜单 8：只看注册表，查电脑装没装剪映专业版（不碰草稿、不做加解密）；没装是正常结果，不算出错"""
+    if jycrypto.uninstall_value('UninstallString') is None:
+        print('没装剪映专业版（注册表里没有它的安装信息）')
+        return
+    ver = jycrypto.uninstall_value('DisplayVersion') or '不详'
+    try:
+        print(f'已装剪映专业版：{jycrypto.install_dir()}（版本 {ver}）')
+    except jycrypto.CryptoError as e:
+        print(f'已装剪映专业版（版本 {ver}），但 {e}')
 
 
 def main():
-    print('==== 剪映草稿 ====\n1. 生成配音草稿：导入初版 SRT，用户打开录音\n2. 生成配音草稿：导入初版 SRT + 工作目录里已有的配音文件')
+    print('==== 剪映草稿 ====\n8. 查电脑装没装剪映专业版（只看注册表，不碰草稿）\n'
+          '1. 生成配音草稿：导入初版 SRT，用户打开生成朗读或录音\n2. 生成配音草稿：导入初版 SRT + 工作目录里已有的配音文件\n'
+          '3. （兜底）文本朗读配音去空白、字幕跟着配音对齐：用工作目录里剪映导出的音频和字幕（没导出字幕、用户确认没改过就用初版 SRT）\n'
+          '4. （兜底）对齐结果导回剪映：原配音草稿备份成 <草稿名>_备份，原名字导入 工程文件/ 里对齐好的配音（一段一段的）和字幕\n'
+          '5. 检查能不能直接读写剪映草稿（加解密）\n'
+          '6. 文本朗读配音在草稿里直接对齐：先备份草稿，删掉段与段之间的空白、字幕跟着配音，出 工程文件/配音.wav、字幕.srt\n'
+          '7. 成片放进剪映草稿：最新的无字幕成片放进配音草稿的视频轨、从 0 秒开始，配音轨静音')
     ch = ask('请选择: ')
-    if ch == '1':
-        make_draft(False)
-    elif ch == '2':
-        make_draft(True)
+    if ch in ('1', '2'):
+        srt, w, h = load_check()
+        make_draft(srt, w, h, pick_top(AUDIO_EXT, '配音文件') if ch == '2' else None)
     else:
-        print('无效选择')
+        fn = {'3': tts_fix, '4': import_back, '5': check_crypto, '6': tts_in_draft, '7': video_in, '8': check_install}.get(ch)
+        if fn:
+            fn()
+        else:
+            print('无效选择')
 
 
 def run():
@@ -170,6 +299,9 @@ def run():
         if e.code not in (None, 0):
             print(f'【出错】{e.code}')
             sys.exit(1)
+    except jycrypto.CryptoError as e:
+        print(f'【出错】加解密用不了：{e}')
+        sys.exit(1)
     except Exception as e:
         traceback.print_exc()
         print(f'【出错】{e}')

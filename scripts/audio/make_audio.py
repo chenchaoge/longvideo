@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """音频制作（菜单启动，在用户工作目录里运行）：配乐 / 音效轨 / 采样轨 / 混音 + 响度标准化，文件都放在当前稿的 工程文件/第N稿文件/中间文件/
-不带任何现成的配乐风格和音效：每条视频自己写脚本，路径写在 project.json 里（相对工作目录，放本稿的 场景脚本/）
-- music_py 配乐脚本：提供 build(cfg, total) → 立体声数组 (n,2)，采样率 48000
-- sfx_py 音效脚本：提供 LIB = {音效名: 函数(rng) → 立体声数组}，可选 LEVEL = {音效名: 基础音量}（默认 1）、VARIANT = {每次随机变化的音效名}
-两种脚本都可以 from synth import …（振荡器、包络、滤波、混响等底层工具）
+不带任何现成的配乐风格和音效：配乐、音效用什么技术做由 AI 按这条视频定，本工具只负责把做好的声音摆好、混音，路径写在 project.json 里（相对工作目录）
+- 配乐（二选一）：music_file 直接填做好的音频文件（用任何工具做的都行）；或 music_py 配乐脚本，提供 build(cfg, total) → 立体声数组 (n,2)（采样率 48000）或音频文件路径
+- 音效（可并用，同名以 sfx_files 为准）：sfx_files = {音效名: 做好的音频文件}；或 sfx_py 音效脚本，提供 LIB = {音效名: 函数(rng) → 立体声数组或音频文件路径}，
+  可选 LEVEL = {音效名: 基础音量}（默认 1）、VARIANT = {每次随机变化的音效名}
+脚本里可以 from synth import …（振荡器、包络、滤波、混响等底层工具），也可以用任何 Python 库、调用外部工具
 混音：有配音 = 人声 + 配乐（自动给人声让位）+ 音效 + 采样；无配音 = 配乐 + 音效 + 采样，电平看 project.json 的 mix"""
 import importlib.util
 import json
@@ -17,7 +18,7 @@ from scipy.io import wavfile
 from scipy.ndimage import minimum_filter1d
 
 from synth import SR, place, lowpass, highpass, bandpass
-from samples import build_samples, duck_env
+from samples import build_samples, decode, duck_env
 
 sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -129,11 +130,26 @@ def load_script(key, label):
     return mod
 
 
+def as_audio(x, label):
+    """脚本交回的声音：立体声数组原样用；音频文件路径（相对工作目录，任何 ffmpeg 能读的格式）解码成 48kHz 立体声"""
+    if isinstance(x, (str, os.PathLike)):
+        p = os.path.join(PJ['dir'], x)
+        if not os.path.exists(p):
+            raise SystemExit(f'{label}交回的音频文件不存在：{x}')
+        return decode(p)
+    return x
+
+
 def make_music():
     tl = PJ['cfg']
-    mod = load_script('music_py', '配乐脚本')
-    print('生成配乐中…')
-    m = mod.build(tl, tl['duration'])
+    if tl.get('music_file'):                                     # 配乐是做好的音频文件
+        m = as_audio(tl['music_file'], 'project.json 的 music_file ')
+    elif tl.get('music_py'):
+        mod = load_script('music_py', '配乐脚本')
+        print('生成配乐中…')
+        m = as_audio(mod.build(tl, tl['duration']), '配乐脚本')
+    else:
+        raise SystemExit('project.json 里没有配乐：music_file 填做好的配乐音频文件，或 music_py 填配乐脚本')
     write_wav(bpath('music.wav'), m / max(1e-9, np.max(np.abs(m))) * 0.9)
     print('配乐完成：', bpath('music.wav'), f'{len(m) / SR:.2f} 秒')
 
@@ -143,8 +159,12 @@ def make_sfx():
     if not os.path.exists(bpath('sfx_events.json')):
         raise SystemExit('缺少音效事件表，先在 render.mjs 里选 4 导出')
     events = json.load(open(bpath('sfx_events.json'), encoding='utf-8'))
-    mod = load_script('sfx_py', '音效脚本') if events else None
-    lib = mod.LIB if mod else {}
+    files = tl.get('sfx_files', {})                           # 做好的音效文件 {音效名: 路径}
+    need = sorted({ev['name'] for ev in events} - set(files))  # 没有现成文件的音效，要靠音效脚本
+    if need and not tl.get('sfx_py'):
+        raise SystemExit(f'这些音效还没做：{"、".join(need)}（sfx_files 填做好的音效文件，或 sfx_py 填音效脚本）')
+    mod = load_script('sfx_py', '音效脚本') if need else None
+    lib = {**(mod.LIB if mod else {}), **{k: (lambda rng, f=f: f) for k, f in files.items()}}
     level, variant = getattr(mod, 'LEVEL', {}), getattr(mod, 'VARIANT', set())
     out = np.zeros((int((tl['duration'] + 3) * SR), 2))
     cache, missing = {}, set()
@@ -154,17 +174,17 @@ def make_sfx():
             missing.add(name)
             continue
         if name in variant:
-            clip = lib[name](np.random.default_rng(int(ev['t'] * 1000)))
+            clip = as_audio(lib[name](np.random.default_rng(int(ev['t'] * 1000))), f'音效 {name} ')
         else:
             if name not in cache:
-                cache[name] = lib[name](np.random.default_rng(1))
+                cache[name] = as_audio(lib[name](np.random.default_rng(1)), f'音效 {name} ')
             clip = cache[name]
         p = float(ev.get('pan', 0))
         if p:
             clip = np.stack([clip[:, 0] * min(1, 1 - p), clip[:, 1] * min(1, 1 + p)], axis=1)
         place(out, clip, ev['t'], level.get(name, 1.0) * float(ev.get('gain', 1)))
     if missing:
-        raise SystemExit(f'音效脚本（sfx_py）的 LIB 里没有这些音效：{"、".join(sorted(missing))}')
+        raise SystemExit(f'sfx_files 和音效脚本（sfx_py）的 LIB 里都没有这些音效：{"、".join(sorted(missing))}')
     out = out[: int(tl['duration'] * SR)]
     write_wav(bpath('sfx.wav'), out * 0.9 / max(1e-9, np.max(np.abs(out))))
     np.save(bpath('sfx_scale.npy'), np.array([0.9 / max(1e-9, np.max(np.abs(out)))]))

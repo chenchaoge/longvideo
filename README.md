@@ -1,63 +1,83 @@
-# longvideo
+<div align="center">
 
-把一篇文稿或一个视频想法做成动画视频的 Claude Code skill。画面、配乐、音效都由 Claude 为每条视频从头写代码生成，不套模板；配音可要可不要，口播类成片能导回剪映接着剪。
+# LongVideo · 专做口播、教程类的长视频SKILL
 
-## 能做什么
+不套任何模版，不做同质化视频
+每一次AI制作视频，都根据你的文稿主题，重新思考
+画面、剧本、分镜、配乐、音效、动效，所有
 
-- 输入：文稿（TXT，UTF-8）或视频想法，可以附图片、录像素材
-- 输出：横版 1280×720 或竖版 1080×1920 的 MP4；有字幕的另出一版带字幕的
-- 配音：在剪映里录，或用现成的配音；混音时配乐自动给人声让位，响度统一到 -14 LUFS
+```sh
+git clone https://github.com/chenchaoge/longvideo.git ~/.claude/skills/longvideo
+```
+</div>
 
-## 流程（共 7 步）
+## 长视频
 
-1. 准备工作：核对文件和想法，判断视频类型
-2. 文稿转字幕（要配音才做）
-3. 取得配音（在剪映里）
-4. 对齐配音和字幕（在剪映里）
-5. 做动画：画面用 Canvas 2D 写，配乐和音效用 Python 合成
-6. 出片：无头 Edge 分段并行渲染，ffmpeg 合成，自动质检
-7. 导入剪映（只有口播类做）
+### 【待补：主打案例的片名】
 
-不要配音、或者没有文稿的视频，只走第 1、5、6 步。
+【待补：主打案例的 GIF，截自成片】
 
-## 运行环境
+【待补：一句话介绍这条片子】
 
-只支持 Windows。
+<table><tr>
+<td width="50%"><img src="assets/showcase/0926-opening.gif" alt="0926成品开头12秒" width="100%" /><br/>【待补：一句说明】</td>
+</tr></table>
 
-- Node.js（测过 22）
-- Python 3（测过 3.13）
-- ffmpeg 和 ffprobe，要带 libass，放进 PATH
-- Microsoft Edge，装在默认位置
-- 剪映专业版：要配音或要导回剪映时才用
-- 字体：Google 的 Noto Sans SC、Noto Serif SC。Adobe 版叫 Source Han，画面认不到
 
-## 安装
+画面、配乐、音效用什么技术，由 AI 按视频主题深度思考后定：画面可以用 Canvas 2D、three.js、SVG，也可以用 Manim、Blender 这类工具做好再接进来；配乐、音效可以用 Python 合成，也可以交任何工具做好的音频文件。混音时配乐自动给人声让位，响度统一到 -14 LUFS。
 
-把仓库放进 Claude Code 的 skills 目录，再装依赖：
+出片后有一道质检：核对成片时长和工程差多少，在每张素材图出现前后抽帧，再全片均匀抽 9 帧，拼成 3×3 总览图检查。
+
+---
+
 
 ```
+longvideo/
+├── SKILL.md             # 主流程和规矩
+├── references/          # 各步骤细则
+└── scripts/
+    ├── render.mjs       # 渲染、出片、质检（菜单启动）
+    ├── srt.mjs          # 文稿转字幕
+    ├── index.html, js/  # 画面引擎
+    ├── audio/           # 混音和合成零件
+    ├── jianying/        # 剪映草稿
+    └── fonts/           # 烧字幕和质检标注用的思源黑体粗体
+```
+
+建议用Opus5.5、Fable5或者Astra模型。暂时只支持 Windows。
+
+依赖：Node.js（测过 22）、Python 3（测过 3.13）、带 libass 的 ffmpeg 和 ffprobe（放进 PATH）、装在默认位置的 Microsoft Edge、剪映专业版（要配音或导回剪映才用）、字体 Noto Sans SC 和 Noto Serif SC（要 Google 版，Adobe 版叫 Source Han，画面认不到）。安装：
+
+```sh
 git clone https://github.com/chenchaoge/longvideo.git ~/.claude/skills/longvideo
 cd ~/.claude/skills/longvideo/scripts
 npm install
 pip install -r requirements.txt
 ```
 
-## 用法
 
-在 Claude Code 里说一句，比如：
+---
 
-```
-用 D:\视频\0920 里的文稿做一条动画视频
-```
+## 关于作者
 
-一条视频用一个文件夹。Claude 会先核对准备情况，之后每一步要你做什么，会一件一件告诉你。改稿时会另做一稿，旧稿原样保留。
+| | |
+|:---|:---|
+| 作者 | 陈朝歌chen |
+| GitHub | [chenchaoge](https://github.com/chenchaoge) |
+| 【待补：其他平台】 | 【待补：链接】 |
 
-## 目录
+## 许可证
 
-- `SKILL.md`：主流程和规矩
-- `references/`：各步骤细则
-- `scripts/`：渲染（render.mjs）、配乐和混音（audio/）、剪映草稿（jianying/）
+代码和文档：MIT，见 [LICENSE](LICENSE)。
 
-## 许可
+例外：`scripts/fonts/NotoSansSC-Bold.ttf` 是思源黑体粗体，沿用 SIL OFL 1.1 许可，见 [scripts/fonts/OFL.txt](scripts/fonts/OFL.txt)。
 
-代码和文档用 MIT 许可，见 [LICENSE](LICENSE)。`scripts/fonts/NotoSansSC-Bold.ttf` 是思源黑体粗体，用 SIL OFL 1.1 许可，见 [scripts/fonts/OFL.txt](scripts/fonts/OFL.txt)。
+---
+
+<div align="center">
+
+MIT License © [chenchaoge](https://github.com/chenchaoge)
+
+</div>
+
+---

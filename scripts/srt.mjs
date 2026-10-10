@@ -1,10 +1,12 @@
-// ================= 文稿转字幕：要念的稿（台词稿或整篇文稿，TXT，一行一条） → 初版 SRT（导入剪映做文本朗读、对轴用；时间只是占位，剪映里按配音重调） =================
-// TXT 一行就是一条字幕（空行跳过）；超过 WARN_LEN 字的只提醒，由用户自己在文稿里改
+// ================= 文稿转字幕：要念的稿（台词稿、文字版或整篇 TXT 文稿，UTF-8 纯文本，一行一条） → 初版 SRT（导入剪映做文本朗读、对轴用；时间只是占位，剪映里按配音重调） =================
+// TXT 一行就是一条字幕（空行不管，不进字幕；只有空格、零宽字符的行也算空行）；超过 WARN_LEN 字的只提醒，由用户自己在文稿里改
 export const WARN_LEN = 30;          // 超过几个字提醒（汉字算 1，英文数字算半个）
 export const CHAR_SEC = 0.25;        // 占位时长：每个字几秒（剪映里会按配音重调）
 export const MIN_SEC = 1.0;          // 每条字幕最短占位秒数
 
-export const width = (s) => [...s].reduce((n, ch) => n + (/[\x20-\x7e]/.test(ch) ? 0.5 : 1), 0);   // 字数（英文数字算半个）
+const INVISIBLE = /[­​-‏⁠﻿]/g;    // 看不见的字符（零宽空格、零宽连接符、BOM 等），网页、Word 复制过来的稿常夹带
+
+export const width =(s) => [...s].reduce((n, ch) => n + (/[\x20-\x7e]/.test(ch) ? 0.5 : 1), 0);   // 字数（英文数字算半个）
 
 // 文稿 → 字幕条 [{text, s, e}]：一行一条，按字数排占位时长（首尾相接）
 export function txtToCues(text, o = {}) {
@@ -12,7 +14,7 @@ export function txtToCues(text, o = {}) {
   const cues = [];
   let t = 0;
   for (const raw of text.replace(/^﻿/, '').replace(/\r/g, '').split('\n')) {
-    const line = raw.trim();
+    const line = raw.replace(INVISIBLE, '').trim();   // 零宽字符先去掉，只剩空白或零宽字符的行也算空行
     if (!line) continue;
     const d = Math.max(minS, width(line) * cs);
     cues.push({ text: line, s: t, e: t + d });

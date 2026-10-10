@@ -28,6 +28,22 @@ function hasFont(fam) {
 
 const BASE = 'work/';                            // 用户工作目录（由 render.mjs 的服务器映射）；project.json 里的路径都相对它
 const DRAFT = 'draft/';                            // 当前稿目录（由 render.mjs 的服务器映射到 工程文件/第N稿文件/）
+const libUrl = (s) => new URL(/^https?:\/\//.test(s) ? s : BASE + s, location.href).href;   // 库：网址原样用，其余相对工作目录
+
+// 第三方库（在场景脚本之前加载）：importmap {模块名: 路径或网址} 让库里的 import 'three' 这类写法找得到；
+// libs 按顺序加载："路径或网址" 按普通脚本（库自己挂到全局，如 p5、gsap）；{src, as} 按 ES 模块，导出挂到 window[as]（如 THREE）
+async function loadLibs() {
+  if (TL.importmap) {
+    const s = document.createElement('script');
+    s.type = 'importmap';
+    s.textContent = JSON.stringify({ imports: Object.fromEntries(Object.entries(TL.importmap).map(([k, v]) => [k, libUrl(v)])) });
+    document.head.appendChild(s);
+  }
+  for (const l of TL.libs || []) {
+    if (typeof l === 'string') await loadScript(libUrl(l));
+    else window[l.as] = await import(libUrl(l.src));
+  }
+}
 // 剪掉的时间段：project.json 的 cuts [[a,b],...]（脚本时间）。场景脚本照写原时间，成片跳过这些段；音频由 make_audio.py 在混音后按同样的段拼接
 let CUTS = [];
 function scriptTime(t) { for (const [a, b] of CUTS) if (t >= a - 1e-6) t += b - a; return t; }      // 成片时间 → 脚本时间
@@ -52,8 +68,10 @@ async function boot() {
   for (const wgt of [500, 600, 700, 800, 900]) await document.fonts.load(`${wgt} 60px "Noto Sans SC"`, '字');
   const lack = ['Noto Sans SC', 'Noto Serif SC'].filter(f => !hasFont(f));   // 没装时画布会悄悄换成别的字体，直接报错
   if (lack.length) throw new Error(`系统缺少字体 ${lack.join('、')}：思源黑体、思源宋体要装 Google 的 Noto 版（Adobe 版名叫 Source Han，认不到）`);
+  await loadLibs();
   for (const s of TL.scripts || []) await loadScript(BASE + s);
   if (window.BOOT_ERROR) return;
+  for (const f of SETUP) await f();
   for (const f of PREP) f();
   for (const b of BUILD) b();
   SFX.sort((a, b) => a.t - b.t);
