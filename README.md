@@ -2,7 +2,7 @@
 
 # LongVideo · 专做口播、教程类的长视频SKILL
 
-## LongVideo 我制作的成品长视频示例
+### 我制作的成品长视频示例
 
 <table><tr>
 <td width="50%"><img src="assets/showcase/0926-opening.gif" alt="SKILL：LongVideo制作的成品长视频示例" width="100%" /><br/>一个外行人用AI做小游戏</td>
@@ -10,8 +10,7 @@
 
 ### 播放27万；8000多点赞；8300多收藏
 
-### 长视频的完整版
-[一个外行人用AI做小游戏](https://www.douyin.com/video/7689842892655209125)
+### 长视频的完整版 [《一个外行人用AI做小游戏》](https://www.douyin.com/video/7689842892655209125)
 
 <br>
 LongVideo · 专做口播、教程类的长视频SKILL<br>
@@ -19,6 +18,7 @@ LongVideo · 专做口播、教程类的长视频SKILL<br>
 不套任何模版，不做同质化视频<br>
 每一次AI制作视频，都根据你的文稿主题，重新思考<br>
 画面、剧本、分镜、配乐、音效、动效 —— 所有<br>
+<br>
 
 ```sh
 git clone https://github.com/chenchaoge/longvideo.git ~/.claude/skills/longvideo
