@@ -12,6 +12,7 @@ import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 import { txtToCues, toSRT, width, WARN_LEN } from './srt.mjs';
+import { srtToPortraitAss } from './portrait_subs.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const WORK = process.cwd();                                    // 用户工作目录（运行时所在目录）
@@ -93,10 +94,10 @@ const subFile = (n) => path.join(WORK, `${PJ.cfg.name}_${n}_字幕.mp4`);      /
 // 字号、描边、边距按 libass 默认 288 行高换算（字号随画面高度缩放）：横版 21.33 ≈ 720P 画面 53 像素、1080P 画面 80 像素（实测一个字约 55 像素宽，
 // 30 个字一行 1654 像素；白字上沿 y 931、下沿 y 982，含描边 y 924～989；字的下沿离底 97 由 MarginV=23 定（按剪映草稿里的字幕位置定的，参数只有整数档，98 取不到）；
 // 一行容许宽 1710 像素由 MarginL=MarginR=21 定（左右各空 105），31 个字一行放得下、32 个字折两行）；
-// 竖版实测 9.6：一个字约 43 像素宽（和横版母版一样大），下沿在 y 1510，一行放不下自动折两行，左右在 140～940 之内
+// 竖版不走这套：先用 portrait_subs.mjs 转成 ASS（自己折行、每行单独定位，行距才能做到 60），样式写在 ASS 里
 const SUB_FONT_DIR = path.join(ROOT, 'fonts');
-const SUB_BASE = 'FontName=Noto Sans SC,Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Shadow=0';
-const SUB_STYLE = { 横版: `${SUB_BASE},FontSize=21.33,Outline=1.65,MarginV=23,MarginL=21,MarginR=21`, 竖版: `${SUB_BASE},FontSize=9.6,Outline=0.72,MarginV=60,MarginL=50,MarginR=50` };
+const SUB_FONT = path.join(SUB_FONT_DIR, 'NotoSansSC-Bold.ttf');   // 竖版折行量字宽用，和烧字幕是同一个字体
+const SUB_STYLE = 'FontName=Noto Sans SC,Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Shadow=0,FontSize=21.33,Outline=1.65,MarginV=23,MarginL=21,MarginR=21';   // 横版
 
 // ---------- 文本编码：用户给的文本不一定是 UTF-8（记事本存的 ANSI 即 GBK、UTF-16），先转成 UTF-8 再用，原件备份 ----------
 const TEXT_EXT = ['.txt', '.md', '.srt', '.csv'];
@@ -327,6 +328,10 @@ function renderStamp() {
 }
 
 async function renderAll(t0s = 0, t1s = null) {
+  if (PJ.cfg.voice) {                                         // 配音改过（重新生成某句、加减句子）duration 没跟着改：结尾会被截掉或多出一截
+    const vd = mediaDur(path.join(PJ.dir, PJ.cfg.voice));
+    if (Math.abs(vd - PJ.cfg.duration) > 1 / FPS) throw new Error(`配音长 ${vd.toFixed(3)} 秒，project.json 的 duration 是 ${PJ.cfg.duration} 秒，对不上：口播类把 duration 改成 ${vd.toFixed(3)}（视频和配音一样长）；非口播类重新拼本稿的配音，拼到和全片一样长（时长不变）`);
+  }
   const chunkDir = path.join(PJ.build, 'chunks');
   fs.mkdirSync(chunkDir, { recursive: true });
   const srv = await startServer();
@@ -457,12 +462,32 @@ function exportFinal() {
   const n = outSeq() + 1;                                     // 新序号 = 已有最大序号 + 1，两版同号
   encodeFinal(v, a, outFile(n), size);
   if (!PJ.cfg.subs) return;
-  fs.copyFileSync(path.join(PJ.dir, PJ.cfg.subs), path.join(PJ.build, 'burn.srt'));   // 拷成简单文件名，免得路径里的特殊字符要转义
-  encodeFinal(v, a, subFile(n), size, subFilter('burn.srt', PJ.cfg.orientation));
+  const burn = burnFile(path.join(PJ.dir, PJ.cfg.subs), PJ.build, 'burn', PJ.cfg.orientation);
+  encodeFinal(v, a, subFile(n), size, subFilter(burn, PJ.cfg.orientation));
 }
-function subFilter(srt, orientation) {                        // 烧字幕滤镜：srt 是 ffmpeg 运行目录里的简单文件名
+// 烧字幕用的文件：横版把 SRT 的每条并成一行存成 <base>.srt，竖版转成 <base>.ass；都放 dir 里、用简单文件名，免得路径里的特殊字符要转义；返回文件名
+function burnFile(srt, dir, base, orientation) {
+  const txt = fs.readFileSync(srt, 'utf8');
+  if (orientation === '竖版') {
+    fs.writeFileSync(path.join(dir, `${base}.ass`), srtToPortraitAss(txt, SUB_FONT));
+    return `${base}.ass`;
+  }
+  fs.writeFileSync(path.join(dir, `${base}.srt`), landscapeSrt(txt));
+  return `${base}.srt`;
+}
+// 横版字幕只放一行：一行放得下 30 个字、不会拆词，字幕区（底部留空 160）也只够一行；字幕里手动换的行并成一行（两边都是英文数字时中间补空格）
+function landscapeSrt(txt) {
+  return txt.replace(/^﻿/, '').replace(/\r/g, '').split(/\n\s*\n/).map(blk => {
+    const ls = blk.split('\n'), k = ls.findIndex(l => l.includes('-->'));
+    if (k < 0) return blk;
+    const text = ls.slice(k + 1).map(l => l.trim()).filter(Boolean)
+      .reduce((a, l) => a + (/[\x21-\x7e]$/.test(a) && /^[\x21-\x7e]/.test(l) ? ' ' : '') + l, '');
+    return [...ls.slice(0, k + 1), text].join('\n');
+  }).join('\n\n') + '\n';
+}
+function subFilter(file, orientation) {                       // 烧字幕滤镜：file 是 ffmpeg 运行目录里的简单文件名
   const fd = SUB_FONT_DIR.replace(/\\/g, '/').replace(/:/g, '\\:');   // 字体目录用绝对路径（skill 和工作目录可能不在同一个盘），盘符冒号要转义
-  return `subtitles=${srt}:fontsdir='${fd}':force_style='${SUB_STYLE[orientation]}'`;
+  return orientation === '竖版' ? `subtitles=${file}:fontsdir='${fd}'` : `subtitles=${file}:fontsdir='${fd}':force_style='${SUB_STYLE}'`;
 }
 
 // ---------- 配音字幕预览（菜单 11）：第 4 步对齐后（只有 B），深灰底 + 烧好的字幕 + 配音合成一个视频放顶层，给用户看字幕和配音对不对得上 ----------
@@ -477,8 +502,7 @@ async function previewVoice() {
   if (fs.existsSync(out) && (await ask(`${PREVIEW_FILE} 已存在，覆盖吗？（输入 y 覆盖，其他取消）: `)) !== 'y') { console.log('已取消'); return; }
   const n = fs.readFileSync(path.join(ENG, srt), 'utf8').split('-->').length - 1;
   console.log(`配音：${ENG_DIR}/${voice}（${dur.toFixed(1)} 秒）\n字幕：${ENG_DIR}/${srt}（${n} 条）\n开始合成预览…`);
-  const tmp = 'preview_burn.srt';                             // 拷成简单文件名，免得路径里的特殊字符要转义，用完删掉
-  fs.copyFileSync(path.join(ENG, srt), path.join(ENG, tmp));
+  const tmp = burnFile(path.join(ENG, srt), ENG, 'preview_burn', orientation);   // 用完删掉
   const [w, h] = PREVIEW_SIZE[orientation];
   const r = spawnSync('ffmpeg', ['-v', 'error', '-stats', '-stats_period', '15', '-y', '-f', 'lavfi', '-i', `color=c=0x202020:s=${w}x${h}:r=${FPS}:d=${dur}`,
     '-i', voice, '-map', '0:v', '-map', '1:a', '-vf', subFilter(tmp, orientation), ...PREVIEW_X264, ...AUDIO_STD, '-shortest', '-movflags', '+faststart', out],
@@ -511,18 +535,23 @@ async function qaFinal() {
     pts.push([s.t0 - 0.1, `${s.key} before`], [s.t0 + 0.1, `${s.key} in`], [s.t1 - 0.1, `${s.key} end`], [s.t1 + 0.1, `${s.key} after`]);
   }
   for (let k = 1; k <= QA_SPOTS; k++) pts.push([dur * k / (QA_SPOTS + 1), 'spot']);
+  const keep = pts.filter(([t]) => t >= 0 && t < dur - 0.5 / FPS);   // 片头之前、最后一帧之后抽不到帧，这些点跳过
   const dir = path.join(PJ.build, 'qa');
   fs.mkdirSync(dir, { recursive: true });
   for (const f of fs.readdirSync(dir)) if (f.endsWith('.png')) fs.unlinkSync(path.join(dir, f));
-  pts.forEach(([t, tag], i) => {
+  let got = 0;                                                // 按实际抽到的图连续编号：编号一断，拼总览图就停在断的地方，后面的图都拼不进去
+  for (const [t, tag] of keep) {
     const label = `${t.toFixed(2)}s ${tag}`.replace(/[':\\]/g, ' ');   // drawtext 里去掉会被当成语法的字符
+    const out = path.join(dir, `q_${String(got).padStart(3, '0')}.png`);
     spawnSync('ffmpeg', ['-v', 'error', '-y', '-ss', t.toFixed(3), '-i', src, '-frames:v', '1',
       '-vf', `scale=${PJ.cfg.orientation === '竖版' ? '360:640' : '640:360'},drawtext=fontfile='NotoSansSC-Bold.ttf':text='${label}':fontsize=26:fontcolor=yellow:box=1:boxcolor=black@0.6:x=10:y=10`,
-      path.join(dir, `q_${String(i).padStart(3, '0')}.png`)], { stdio: 'inherit', cwd: SUB_FONT_DIR });   // 在字体目录里跑：drawtext 读不了带中文的字体路径
-  });
+      out], { stdio: 'inherit', cwd: SUB_FONT_DIR });         // 在字体目录里跑：drawtext 读不了带中文的字体路径
+    if (fs.existsSync(out)) got++;
+  }
   spawnSync('ffmpeg', ['-v', 'error', '-y', '-framerate', '1', '-i', path.join(dir, 'q_%03d.png'), '-vf', 'tile=3x3:padding=4',
     path.join(dir, 'sheet_%02d.png')], { stdio: 'inherit' });
-  console.log(`抽帧 ${pts.length} 张（来源 ${path.basename(src)}），总览图：${dir}\\sheet_*.png`);
+  const skip = pts.length - got;
+  console.log(`抽帧 ${got} 张（来源 ${path.basename(src)}）${skip ? `，${skip} 个点在片头之前、片尾之后或没抽到，已跳过` : ''}，总览图：${dir}\\sheet_*.png`);
 }
 
 async function main() {

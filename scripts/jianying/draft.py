@@ -4,6 +4,7 @@
 - 默认：能加解密（菜单 5 检查），Claude 直接读写草稿：菜单 6 文本朗读配音在草稿里直接对齐，菜单 7 成片放进草稿
 - 兜底：加解密用不了，用户配合：菜单 3 用剪映导出的音频和字幕对齐，菜单 4 导回剪映
 草稿建在剪映的草稿目录里，名字 <片名>_配音，重名自动加序号；备份的草稿名 <草稿名>_备份；这一步正常只有这两个草稿"""
+import difflib
 import json
 import os
 import re
@@ -202,10 +203,61 @@ def mismatch(subs, voices):
     return msg + '\n草稿没改'
 
 
+def flat(s):
+    """比文字用：只留字和数字（换行、空白、标点都不算，标点不影响念什么），不分大小写"""
+    return re.sub(r'[\W_]+', '', s).lower()
+
+
+def rows(s):
+    """字幕文字按行拆开（去掉空行），比换行用"""
+    return [flat(x) for x in s.split('\n') if flat(x)]
+
+
+def says(text, name):
+    """这段配音念的是不是这条字幕：文本朗读的配音名字就是生成时的字幕（太长只留开头、加 ...，这时只能比开头）"""
+    head = flat(name)
+    if name.rstrip().endswith(('...', '…')):
+        return bool(head) and flat(text).startswith(head)
+    return bool(head) and flat(text) == head
+
+
+def changes(old, texts, cues, names):
+    """和上次的 字幕.srt 比，逐条说清改了什么，分三种：字幕和配音都改了、只改了字幕（配音没重新生成）、只换了行；
+    old 是 tts_align.read_srt 读的上次结果，没有就是 []；texts 草稿里每条字幕的文字，cues [(开始, 时长)] 微秒，names 每段配音的名字"""
+    if not old:                                               # 第一次对齐：只报配音念的和字幕不一样的
+        return [f'第 {j + 1} 条（多半是只改了字幕、配音没重新生成）'
+                for j, (t, n) in enumerate(zip(texts, names)) if not says(t, n)]
+    out, shift = [], False
+    sm = difflib.SequenceMatcher(a=[flat(t) for *_, t in old], b=list(map(flat, texts)), autojunk=False)
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == 'equal' or (tag == 'replace' and i2 - i1 == j2 - j1):   # 一条对一条地比
+            for i, j in zip(range(i1, i2), range(j1, j2)):
+                a, b, t = old[i][1] - old[i][0], cues[j][1] / US, texts[j]
+                was = '' if i == j else f'（原第 {i + 1} 条）'
+                moved = abs(a - b) > 0.0015                   # 上次的字幕时间只到毫秒，差 1 毫秒以内算没变
+                long = f'，配音 {a:.3f} → {b:.3f} 秒' if moved else ''
+                if flat(old[i][2]) != flat(t):                # 重新生成了配音：名字对得上新字幕，长度也变了
+                    kind = '字幕和配音都改了' if says(t, names[j]) and moved else '只改了字幕，配音没重新生成（念的还是原来的）'
+                    out.append(f'第 {j + 1} 条{was}：{kind}{long}')
+                elif rows(old[i][2]) != rows(t):
+                    out.append(f'第 {j + 1} 条{was}：只换了行{long}')
+                elif moved:
+                    out.append(f'第 {j + 1} 条{was}：字没改，配音长度变了{long}')
+            continue
+        shift = True
+        out += [f'删掉了原来的第 {i + 1} 条：{" ".join(old[i][2].split())}' for i in range(i1, i2)]
+        out += [f'新加了第 {j + 1} 条：{" ".join(texts[j].split())}' + ('' if says(texts[j], names[j]) else '（配音念的和字幕不一样）')
+                for j in range(j1, j2)]
+    if shift:
+        out.append(f'加删了句子（字幕从 {len(old)} 条变成 {len(texts)} 条）：后面句子的序号变了')
+    return out
+
+
 def tts_in_draft():
     """菜单 6（默认，能加解密时）：文本朗读的配音直接在配音草稿里对齐。一条字幕对一段配音，按顺序一一对应；
     每段配音的长度直接从草稿里读（已算上倍速），配音段从 0 秒起首尾相接（删掉段与段之间的空白，每段只挪位置、不剪不改，还是一段一段的），
-    字幕的起止改成和它那段配音一样；先备份草稿再改；同时出 工程文件/配音.wav（按草稿位置拼的副本）、字幕.srt（做动画用）"""
+    字幕的起止改成和它那段配音一样；先备份草稿再改；同时出 工程文件/配音.wav（按草稿位置拼的副本）、字幕.srt（做动画用）；
+    已有上次的 字幕.srt 就逐条列出这次改了什么（见 changes），只改字幕、配音没重新生成的照常对齐，不算对不上"""
     read_check()
     jydraft.ensure_closed()
     root = jydraft.draft_root()
@@ -225,19 +277,28 @@ def tts_in_draft():
     changed = any(jydraft.tr(s) != c or jydraft.tr(v) != c for s, v, c in zip(subs, voices, cues))
     ask_overwrite()
     if changed:
-        bname, made = jydraft.backup(root, name, BACKUP_TAG)
-        print(f'原草稿已备份成「{bname}」' if made else f'已有备份「{bname}」（第一次对齐前的样子），不再备份')
+        bname, replaced = jydraft.backup(root, name, BACKUP_TAG)
+        print(f'原草稿已备份成「{bname}」' + ('（换掉了上次的备份）' if replaced else ''))
         for s, v, (a, n) in zip(subs, voices, cues):
             v['target_timerange'] = {'start': a, 'duration': n}   # 配音只挪位置，长度不变
             s['target_timerange'] = {'start': a, 'duration': n}
         d.save()
     os.makedirs(ENG, exist_ok=True)
+    old = tts_align.read_srt(OUT_SUBS) if os.path.exists(OUT_SUBS) else []   # 上次对齐的结果，用来比这次改了什么
+    texts = [d.text(s) for s in subs]
+    diff = changes(old, texts, cues, [d.material(v).get('name', '') for v in voices])
     jydraft.mixdown(d, OUT_VOICE, *d.audio_format())
     with open(OUT_SUBS, 'w', encoding='utf-8', newline='') as f:
-        f.write(tts_align.to_srt([d.text(s) for s in subs], [(a / US, (a + n) / US) for a, n in cues]))
+        f.write(tts_align.to_srt(texts, [(a / US, (a + n) / US) for a, n in cues]))
     print(f'字幕 {len(subs)} 条，配音 {len(voices)} 段，一一对上，配音还是一段一段的')
     print(f'删掉段与段之间的空白，配音从 {old_end / US:.1f} 秒变成 {t / US:.1f} 秒；草稿「{name}」已对齐' if changed
           else f'空白已经删过了，草稿「{name}」没改')
+    if old:
+        print('和上次的字幕比：' + (''.join(f'\n  {x}' for x in diff) if diff else '没有改动'))
+        if abs(old[-1][1] - t / US) > 0.01:
+            print(f'配音总长从 {old[-1][1]:.3f} 秒变成 {t / US:.3f} 秒')
+    elif diff:
+        print('第一次对齐，下面这些条的配音和字幕不一样：' + ''.join(f'\n  {x}' for x in diff))
     print(f'已生成：{OUT_VOICE}\n已生成：{OUT_SUBS}')
 
 

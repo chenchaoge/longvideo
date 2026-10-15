@@ -5,7 +5,7 @@ const cv = document.getElementById('cv');         // 画布尺寸由 render.mjs 
 const ctx = cv.getContext('2d');
 const W = cv.width, H = cv.height, FPS = 30;
 const PORTRAIT = H > W;                           // 竖版
-const CX = W / 2, CY = PORTRAIT ? 805 : 460;      // 画面内容中心：横版底部留 160 字幕区、主要内容区 y 0～920 的中心；竖版是主要内容区 x 140～940、y 250～1360 的中心
+const CX = W / 2, CY = PORTRAIT ? 770 : 460;      // 画面内容中心：横版底部留 160 字幕区、主要内容区 y 0～920 的中心；竖版是主要内容区 x 180～900、y 250～1290 的中心
 document.documentElement.style.setProperty('--ar', W / H);   // 预览页按画面比例缩放
 let DUR = 0;                                      // 成片时长，启动时从项目配置读取（减去 cuts 剪掉的段）
 let TL = null;                                    // 项目配置 project.json

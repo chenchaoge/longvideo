@@ -5,10 +5,12 @@
 - 音效（可并用，同名以 sfx_files 为准）：sfx_files = {音效名: 做好的音频文件}；或 sfx_py 音效脚本，提供 LIB = {音效名: 函数(rng) → 立体声数组或音频文件路径}，
   可选 LEVEL = {音效名: 基础音量}（默认 1）、VARIANT = {每次随机变化的音效名}
 脚本里可以 from synth import …（振荡器、包络、滤波、混响等底层工具），也可以用任何 Python 库、调用外部工具
+两种脚本里都能直接用 c(n)、ce(n)：第 n 句字幕的起止秒（n 从 1 开始，和场景脚本一样），配乐换段、重音、停顿都用它写，配音改了自动跟着挪；别把 c、ce 用作自己的变量名
 混音：有配音 = 人声 + 配乐（自动给人声让位）+ 音效 + 采样；无配音 = 配乐 + 音效 + 采样，电平看 project.json 的 mix"""
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import traceback
@@ -115,8 +117,33 @@ def voice_activity(v):
     return full, rms, act
 
 
+def load_cues():
+    """project.json 的 subs → {句号: (起, 止)}，和场景脚本的 CUES 一样按每段第一行的序号；没有字幕返回空表"""
+    rel = PJ['cfg'].get('subs')
+    if not rel:
+        return {}
+    txt = open(os.path.join(PJ['dir'], rel), encoding='utf-8-sig').read().replace('\r', '')
+    sec = [3600, 60, 1, 0.001]
+    cues = {}
+    for blk in re.split(r'\n\s*\n', txt.strip()):
+        ls = blk.split('\n')
+        m = re.findall(r'(\d+):(\d+):(\d+)[,.](\d+)', ls[1]) if len(ls) > 1 and ls[0].strip().isdigit() else []
+        if len(m) == 2:
+            cues[int(ls[0])] = tuple(sum(int(v) * k for v, k in zip(t, sec)) for t in m)
+    return cues
+
+
+def cue_time(n, end):
+    """第 n 句字幕的起（end=False）或止（end=True）秒，给配乐、音效脚本当 c(n)、ce(n) 用"""
+    if 'cues' not in PJ:
+        PJ['cues'] = load_cues()
+    if n not in PJ['cues']:
+        raise SystemExit(f'字幕里没有第 {n} 句（共 {len(PJ["cues"])} 句；没字幕的项目 project.json 没有 subs）')
+    return PJ['cues'][n][end]
+
+
 def load_script(key, label):
-    """载入本稿自己写的脚本（project.json 的 music_py / sfx_py），没填或文件不在就报错"""
+    """载入本稿自己写的脚本（project.json 的 music_py / sfx_py），没填或文件不在就报错；脚本里可直接用 c(n)、ce(n)"""
     rel = PJ['cfg'].get(key)
     if not rel:
         raise SystemExit(f'project.json 没有 {key}（{label}）：这条视频的{label}要自己写，路径填进 {key}')
@@ -125,6 +152,8 @@ def load_script(key, label):
         raise SystemExit(f'{key} 指向的{label}不存在：{rel}')
     spec = importlib.util.spec_from_file_location(f'project_{key}', p)
     mod = importlib.util.module_from_spec(spec)
+    mod.c = lambda n: cue_time(n, False)                      # 和场景脚本一样的写法：时间点跟着字幕走，不写死秒数
+    mod.ce = lambda n: cue_time(n, True)
     sys.path.insert(0, HERE)                                  # 脚本里可直接 from synth import …
     spec.loader.exec_module(mod)
     return mod

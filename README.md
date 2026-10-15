@@ -42,9 +42,12 @@ longvideo/
 └── scripts/
     ├── render.mjs       # 渲染、出片、质检（菜单启动）
     ├── srt.mjs          # 文稿转字幕
+    ├── portrait_subs.mjs  # 竖版烧字幕（自己折行、按行定位）
     ├── index.html, js/  # 画面引擎
     ├── audio/           # 混音和合成零件
     ├── jianying/        # 剪映草稿
+    ├── clean.mjs        # 项目完成后清理中间文件（菜单启动）
+    ├── avatar.py        # 作者头像按脸的比例裁切（菜单启动）
     └── fonts/           # 烧字幕和质检标注用的思源黑体粗体
 ```
 

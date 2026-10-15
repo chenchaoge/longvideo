@@ -206,17 +206,18 @@ class Draft:
 
 
 def backup(root, name, tag='_备份'):
-    """草稿复制一份 <草稿名><tag>，已经有了就不再备份（备份留的是第一次改之前的样子）；
-    副本的草稿名、路径、id 改成它自己的，剪映里当成另一个草稿；返回 (备份名, 这次备份了没有)"""
+    """草稿复制一份 <草稿名><tag>，只留一份：已经有了就换成这次改之前的样子（用户每次改完草稿都可能重新对齐，备份要是最新的）；
+    副本的草稿名、路径、id 改成它自己的，剪映里当成另一个草稿；返回 (备份名, 是不是换掉了旧备份)"""
     bname = name + tag
     dst = os.path.join(root, bname)
-    if os.path.exists(dst):
-        return bname, False
+    had = os.path.exists(dst)
+    if had:
+        shutil.rmtree(dst)
     shutil.copytree(os.path.join(root, name), dst)
     b = Draft(dst)
     b.meta.update(draft_name=bname, draft_fold_path=dst.replace('\\', '/'), draft_id=str(uuid.uuid4()).upper())
     b.save_meta()
-    return bname, True
+    return bname, had
 
 
 # ---------- 音频 ----------
