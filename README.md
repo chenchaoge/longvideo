@@ -23,6 +23,7 @@ LongVideo · 专做口播、教程类的长视频SKILL<br>
 ```sh
 git clone https://github.com/chenchaoge/longvideo.git ~/.claude/skills/longvideo
 ```
+以 Claude Code 为例；用别的 AI 工具，换成它读取 skill 的目录
 </div>
 
 ## LongVideo skill 说明
@@ -33,6 +34,8 @@ git clone https://github.com/chenchaoge/longvideo.git ~/.claude/skills/longvideo
 
 出片后有一道质检：核对成片时长和工程差多少，在每张素材图出现前后抽帧，再全片均匀抽 9 帧，拼成 3×3 总览图检查。
 
+成片定稿后做封面：你只给封面文案，AI 用成片的画风和角色设计封面，按平台出对应比例。横版出 4:3 和 3:4（视频号、抖音用），发 YouTube 再加 16:9；竖版出 3:4。
+
 ---
 
 ```
@@ -40,20 +43,20 @@ longvideo/
 ├── SKILL.md             # 主流程和规矩
 ├── references/          # 各步骤细则
 └── scripts/
-    ├── render.mjs       # 渲染、出片、质检（菜单启动）
+    ├── render.mjs       # 渲染、出片、质检、封面（菜单启动）
     ├── srt.mjs          # 文稿转字幕
     ├── portrait_subs.mjs  # 竖版烧字幕（自己折行、按行定位）
     ├── index.html, js/  # 画面引擎
     ├── audio/           # 混音和合成零件
     ├── jianying/        # 剪映草稿
-    ├── clean.mjs        # 项目完成后清理中间文件（菜单启动）
+    ├── clean.mjs        # 项目完成后清理中间文件和临时文件（菜单启动）
     ├── avatar.py        # 作者头像按脸的比例裁切（菜单启动）
     └── fonts/           # 烧字幕和质检标注用的思源黑体粗体
 ```
 
 建议用Opus5.5、Fable5或者Astra模型。暂时只支持 Windows。
 
-依赖：Node.js（测过 22）、Python 3（测过 3.13）、带 libass 的 ffmpeg 和 ffprobe（放进 PATH）、装在默认位置的 Microsoft Edge、剪映专业版（只有用剪映配音时才用，没装也能开工；AI 读写剪映草稿测过 11.5 版，读写时要退出剪映）、字体 Noto Sans SC 和 Noto Serif SC（要 Google 版，Adobe 版叫 Source Han，画面认不到）。安装：
+依赖：Node.js（测过 22）、Python 3（测过 3.13）、带 libass 的 ffmpeg 和 ffprobe（放进 PATH）、装在默认位置的 Microsoft Edge、剪映专业版（只有用剪映配音时才用，没装也能开工；AI 读写剪映草稿测过 11.5 版，读写时要退出剪映）、字体 Noto Sans SC 和 Noto Serif SC（要 Google 版，Adobe 版叫 Source Han，画面认不到）。安装（以 Claude Code 为例；用别的 AI 工具，把 `~/.claude/skills` 换成它读取 skill 的目录）：
 
 ```sh
 git clone https://github.com/chenchaoge/longvideo.git ~/.claude/skills/longvideo

@@ -1,7 +1,10 @@
-// ================= 清理中间文件（菜单启动）：1 统计可清理的文件（只看不删） / 2 清理 =================
+// ================= 清理中间文件和临时文件（菜单启动）：1 统计可清理的文件（只看不删） / 2 清理 =================
 // 在用户工作目录里运行（cd 过去再 node <本脚本>）：只管运行时所在的这一个工作目录（一条视频），不碰别的项目；有几个项目就到各自的工作目录各跑一次
-// 只看 工程文件/第X稿文件/中间文件/，只删按名字认得出的工具生成文件（render.mjs、audio/make_audio.py 出片时生成的），认不出的文件、链接都不动
-// 用脚本删、不让 AI 自己删，是怕删错、删多；顶层有成片（项目做完）才让删
+// 只看三处：
+// - 工程文件/第X稿文件/中间文件/：只删按名字认得出的工具生成文件（render.mjs、audio/make_audio.py 出片时生成的）
+// - 工程文件/临时文件/：AI 做这条视频时放的一次性文件，里面的都删（文件夹本身留着）
+// - 顶层的改动预览图 第X稿改动预览_<标题>.png（render.mjs 菜单 12 出的）
+// 认不出的文件、链接（和含链接的文件夹）都不动；用脚本删、不让 AI 自己删，是怕删错、删多；顶层有成片（项目做完）才让删
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
@@ -17,6 +20,8 @@ const KNOWN_DIRS = ['chunks', 'check', 'qa', 'clips'];         // render.mjs：�
 const KNOWN_FILES = ['video_noaudio.mp4', 'burn.srt', 'burn.ass', 'sfx_events.json', 'samples.json',   // render.mjs：无声画面、烧字幕用的字幕、音效和采样事件表
   'voice.wav', 'music.wav', 'sfx.wav', 'samples.wav', 'mix_raw.wav', 'mix.wav', 'sfx_scale.npy'];   // make_audio.py：各条音轨、混音
 const KNOWN_RE = [/^片段_[\d.]+_[\d.]+\.mp4$/];                // render.mjs 菜单 2 渲染的片段
+const TEMP_DIR = '临时文件';                                    // 工程文件/临时文件/：AI 做这条视频时放的一次性文件（SKILL.md「目录约定」）
+const CHANGE_RE = /^第[一二三四五六七八九十]+稿改动预览_.+\.png$/;   // 顶层的改动预览图（render.mjs 的 CHANGE_TAG）
 
 // ---------- 输入（兼容管道输入） ----------
 const piped = !process.stdin.isTTY;
@@ -36,6 +41,11 @@ function filesIn(p) {                                         // p 下的所有�
   if (st.isDirectory()) return fs.readdirSync(p).flatMap(n => filesIn(path.join(p, n)));
   return [{ f: p, size: st.isSymbolicLink() ? 0 : st.size }];
 }
+function hasLink(p) {                                         // p 自己或里面有没有链接
+  const st = fs.lstatSync(p);
+  if (st.isSymbolicLink()) return true;
+  return st.isDirectory() && fs.readdirSync(p).some(n => hasLink(path.join(p, n)));
+}
 
 // 顶层的成片：<片名>_<序号>.mp4、<片名>_<序号>_字幕.mp4，片名取各稿 project.json 的 name
 function finals(drafts) {
@@ -48,13 +58,14 @@ function finals(drafts) {
     && fs.statSync(path.join(WORK, f)).isFile());
 }
 
-// 盘点本项目：targets 要删的文件或文件夹（各带里面的文件）、skipped 认不出不动的、finals 成片
+// 盘点本项目：groups 按位置分组的可清理文件、targets 要删的文件或文件夹（各带里面的文件）、skipped 认不出不动的、finals 成片
 function scan() {
   if (!fs.existsSync(ENG)) throw new Error(`当前目录（${WORK}）不是视频工作目录（没有 ${ENG_DIR}/）：要在要清理的那条视频的工作目录里运行`);
   const drafts = fs.readdirSync(ENG).filter(n => DRAFT_RE.test(n) && fs.lstatSync(path.join(ENG, n)).isDirectory());
   if (!drafts.length) throw new Error(`${ENG_DIR}/ 里没有稿目录（第一稿文件、第二稿文件…）`);
-  const r = { builds: [], targets: [], skipped: [], finals: finals(drafts) };
-  for (const d of drafts) {
+  const r = { groups: [], targets: [], skipped: [], finals: finals(drafts) };
+  const add = (label, ts) => { r.groups.push({ label, files: ts.flatMap(t => t.files) }); r.targets.push(...ts); };
+  for (const d of drafts) {                                   // 各稿的 中间文件/：只删认得出的
     const b = path.join(ENG, d, BUILD_DIR);
     if (!fs.existsSync(b)) continue;
     if (!fs.lstatSync(b).isDirectory()) { r.skipped.push(b); continue; }   // 中间文件 是链接或不是文件夹：不动
@@ -64,10 +75,23 @@ function scan() {
       const known = st.isDirectory() ? KNOWN_DIRS.includes(n) : st.isFile() && (KNOWN_FILES.includes(n) || KNOWN_RE.some(re => re.test(n)));
       if (known) ts.push({ p, files: filesIn(p) }); else r.skipped.push(p);
     }
-    r.builds.push({ dir: b, files: ts.flatMap(t => t.files) });
-    r.targets.push(...ts);
+    add(rel(b), ts);
   }
-  r.files = r.builds.flatMap(b => b.files);
+  const tmp = path.join(ENG, TEMP_DIR);                       // 临时文件/：里面的都删，链接和含链接的文件夹不动
+  if (fs.existsSync(tmp)) {
+    if (!fs.lstatSync(tmp).isDirectory()) r.skipped.push(tmp);
+    else {
+      const ts = [];
+      for (const n of fs.readdirSync(tmp)) {
+        const p = path.join(tmp, n);
+        if (hasLink(p)) r.skipped.push(p); else ts.push({ p, files: filesIn(p) });
+      }
+      add(rel(tmp), ts);
+    }
+  }
+  add('顶层的改动预览图', fs.readdirSync(WORK).filter(n => CHANGE_RE.test(n) && fs.lstatSync(path.join(WORK, n)).isFile())
+    .map(n => ({ p: path.join(WORK, n), files: filesIn(path.join(WORK, n)) })));
+  r.files = r.groups.flatMap(g => g.files);
   return r;
 }
 
@@ -77,12 +101,12 @@ function report(r) {
   if (!r.files.length) console.log('没有可清理的文件');
   else {
     console.log('可清理的：');
-    for (const b of r.builds) if (b.files.length) console.log(`  ${rel(b.dir)}  ${fmt(sum(b.files))}（${b.files.length} 个文件）`);
+    for (const g of r.groups) if (g.files.length) console.log(`  ${g.label}  ${fmt(sum(g.files))}（${g.files.length} 个文件）`);
     console.log(`最大的 ${Math.min(TOP_N, r.files.length)} 个文件：`);
     for (const x of [...r.files].sort((a, b) => b.size - a.size).slice(0, TOP_N)) console.log(`  ${fmt(x.size).padStart(9)}  ${rel(x.f)}`);
     console.log(`合计：${r.files.length} 个文件，${fmt(sum(r.files))}`);
   }
-  if (r.skipped.length) { console.log('认不出、不会动的：'); r.skipped.forEach(p => console.log(`  ${rel(p)}`)); }
+  if (r.skipped.length) { console.log('不会动的（认不出的文件、链接和含链接的文件夹）：'); r.skipped.forEach(p => console.log(`  ${rel(p)}`)); }
 }
 
 async function clean() {
@@ -101,7 +125,7 @@ async function clean() {
 }
 
 async function main() {
-  console.log(`==== 清理中间文件（工作目录：${WORK}）====
+  console.log(`==== 清理中间文件和临时文件（工作目录：${WORK}）====
 1. 统计可清理的文件（只看不删）
 2. 清理（先统计，输入 y 才删；顶层没有成片不让删）`);
   const ch = await ask('请选择: ');

@@ -1,6 +1,6 @@
-// ================= 动画工具（菜单启动）：文本转 UTF-8 / 文稿转字幕 / 配音字幕预览 / 初始化项目 / 并行渲染 / 抽帧检查 / 导出音效表 / 出片 / 预览 / 成片质检 =================
+// ================= 动画工具（菜单启动）：文本转 UTF-8 / 文稿转字幕 / 配音字幕预览 / 初始化项目 / 并行渲染 / 抽帧检查 / 改动预览图 / 导出音效表 / 出片 / 预览 / 成片质检 / 出封面 =================
 // 在用户工作目录里运行（cd 过去再 node <本脚本>）：工作目录 = 一条视频，用户只准备 文稿（任何格式）和素材；
-// 要给用户看的（超长字幕清单、配音字幕预览、成片）放工作目录顶层，其余都放 工程文件/：各稿通用的（开场核对、进度记录、初版 SRT、剪映导出的配音和 SRT）放 工程文件/ 下，随稿变化的（动画大纲、project.json、AI 写的字幕、场景脚本/、中间文件/）放 工程文件/第N稿文件/
+// 要给用户看的（超长字幕清单、配音字幕预览、改动预览图、成片、封面）放工作目录顶层，其余都放 工程文件/：各稿通用的（开场核对、进度记录、初版 SRT、剪映导出的配音和 SRT）放 工程文件/ 下，随稿变化的（动画大纲、project.json、AI 写的字幕、场景脚本/、中间文件/）放 工程文件/第N稿文件/
 // 配乐、音效、混音另用 audio/make_audio.py
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -39,6 +39,12 @@ const AUDIO_STD = ['-c:a', 'aac', '-b:a', '256k'];
 const PREVIEW_FILE = '配音字幕预览.mp4';                          // 第 4 步对齐后给用户看的预览（放顶层）；只有配音没经过剪映的 B 才出，A1、A2 让用户在剪映草稿里看
 const PREVIEW_SIZE = { 横版: [1280, 720], 竖版: [720, 1280] };    // 预览只看字幕和配音对不对得上，小画面出得快；字幕随画面等比缩放，样子和成片一样
 const PREVIEW_X264 = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '28', '-pix_fmt', 'yuv420p'];
+const CHANGE_TAG = '改动预览';                                  // 按用户意见改了画面后给用户看的预览图：顶层 <第X稿>改动预览_<标题>.png（第 9 步清理会删，名字要和 clean.mjs 一致）
+const CHANGE_COLS = { 横版: 2, 竖版: 4 };                        // 改动预览图每行几张（每张按画布一半大小）
+const COVER_SIZES = { '16比9': [1920, 1080], '4比3': [1440, 1080], '3比4': [1080, 1440] };   // 封面比例和像素（第 7 步，见 references/做封面.md）
+const COVER_DIR = '封面', COVER_JS = '封面.js';                 // 封面脚本：当前稿目录/封面/封面.js（菜单 0 复制下一稿时跟着带过去）
+const COVER_MAX = 2 * 1024 * 1024;                            // 封面上限 2MB（YouTube 的限制，三个平台都按它）
+const COVER_Q = [0.92, 0.87, 0.82, 0.77, 0.72];               // 封面 JPG 质量，超过上限就往下降一档
 const QA_SPOTS = 9;                                           // 质检时全片均匀抽帧张数
 const IMG_EXT = ['.png', '.jpg', '.jpeg', '.bmp', '.webp', '.gif'];
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml',
@@ -402,6 +408,96 @@ async function checkFrames(times) {
   await browser.close(); srv.close();
 }
 
+// ---------- 改动预览图（菜单 12）：按用户意见改了画面后，把改动处的几帧拼成一张图放顶层，每帧上面写时间和说明，给用户看改对没有 ----------
+async function changePreview() {
+  const title = (await ask('标题（改了哪里，放进文件名，如 第59句）: ')).replace(/[\\/:*?"<>|\s]+/g, '');
+  if (!title) throw new Error('要输入标题');
+  console.log('逐行输入时间点：秒数 + 空格 + 这一帧的说明（场景脚本里的时间），空行结束');
+  const pts = [];
+  for (let line; (line = await ask('时间点: '));) {
+    const m = line.match(/^(\d+(?:\.\d+)?)\s*(.*)$/);
+    if (!m) throw new Error(`这行格式不对：${line}（要写成 秒数 空格 说明，如 148.2 看到第三段就停住）`);
+    pts.push({ t: Number(m[1]), cap: m[2] });
+  }
+  if (!pts.length) throw new Error('没有输入时间点');
+  const out = path.join(WORK, `${PJ.draftName.replace(/文件$/, '')}${CHANGE_TAG}_${title}.png`);
+  const had = fs.existsSync(out);
+  const srv = await startServer();
+  const { browser, page, logs } = await openPage(srv.address().port);
+  const b64 = await page.evaluate(async ({ pts, cols }) => {
+    const cv = document.getElementById('cv'), CAP = 64;       // CAP：每帧上面写说明的那条的高度
+    const fw = Math.round(cv.width / 2), fh = Math.round(cv.height / 2), n = Math.min(cols, pts.length);
+    const sheet = document.createElement('canvas');
+    sheet.width = fw * n; sheet.height = (fh + CAP) * Math.ceil(pts.length / n);
+    const g = sheet.getContext('2d');
+    g.fillStyle = '#151515'; g.fillRect(0, 0, sheet.width, sheet.height);
+    await document.fonts.load('bold 30px "Noto Sans SC"');
+    for (const [i, p] of pts.entries()) {
+      await window.framePNG(p.t);                              // 这一帧画到画布上（返回的 PNG 不用）
+      const x = (i % n) * fw, y = Math.floor(i / n) * (fh + CAP);
+      g.drawImage(cv, x, y + CAP, fw, fh);
+      const ds = Math.round(p.t * 10);                         // 按 0.1 秒取整再拆分秒，免得 59.96 写成 0:60.0
+      const label = `${Math.floor(ds / 600)}:${((ds % 600) / 10).toFixed(1).padStart(4, '0')} ${p.cap}`.trim();
+      let size = 30;
+      do g.font = `bold ${size}px "Noto Sans SC"`; while (g.measureText(label).width > fw - 24 && --size > 14);   // 说明太长就缩小字号
+      g.fillStyle = '#fff'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText(label, x + fw / 2, y + CAP / 2);
+      g.strokeStyle = '#000'; g.lineWidth = 4; g.strokeRect(x, y, fw, fh + CAP);   // 格子之间的分隔线
+    }
+    return sheet.toDataURL('image/png').slice(22);
+  }, { pts, cols: CHANGE_COLS[PJ.cfg.orientation] });
+  fs.writeFileSync(out, Buffer.from(b64, 'base64'));
+  console.log(`改动预览图（${pts.length} 帧）：${out}${had ? '（换掉了同名的旧图）' : ''}`);
+  const missing = await page.evaluate(() => window.getMissing());
+  if (missing.length) console.log('缺失资源:', missing.join(', '));
+  if (logs.length) console.log('页面警告:\n' + [...new Set(logs)].slice(0, 30).join('\n'));
+  await browser.close(); srv.close();
+}
+
+// ---------- 封面（第 7 步）：当前稿的 封面/封面.js 按输入的比例各画一张，出到顶层 <片名>_封面_<比例>.jpg ----------
+// 封面脚本在动画页面里、所有场景脚本之后加载，提供 drawCover(g, w, h, size)：画布已换成这个比例的尺寸（w×h），场景脚本里的函数、图片都能用
+// 不放进 project.json、场景脚本/：改封面不会让已渲好的画面作废
+async function exportCovers() {
+  const names = Object.keys(COVER_SIZES).join('、');
+  const sizes = (await ask(`封面比例（逗号分隔，可选 ${names}）: `)).split(/[,，、\s]+/).filter(Boolean);
+  if (!sizes.length) throw new Error(`要输入封面比例，如 4比3,3比4（可选 ${names}）`);
+  const bad = sizes.filter(s => !COVER_SIZES[s]);
+  if (bad.length) throw new Error(`认不出的比例：${bad.join('、')}（只能是 ${names}）`);
+  const sp = path.join(PJ.draft, COVER_DIR, COVER_JS);
+  if (!fs.existsSync(sp)) throw new Error(`封面脚本不存在：${sp}`);
+  const srv = await startServer();
+  const { browser, page, logs } = await openPage(srv.address().port);
+  await page.evaluate(() => window.framePNG(0));               // 先走一帧，图片、字体都备好
+  await page.addScriptTag({ content: fs.readFileSync(sp, 'utf8') });
+  if (!await page.evaluate(() => typeof drawCover === 'function'))   // 脚本加载出错（如和场景脚本重名）也会走到这里，带上页面报错
+    throw new Error(`封面脚本没加载成功，或里面没有 drawCover(g, w, h, size) 函数：${sp}${logs.length ? '\n页面报错:\n' + [...new Set(logs)].join('\n') : ''}`);
+  for (const size of sizes) {
+    const [w, h] = COVER_SIZES[size];
+    await page.evaluate(async ({ w, h, size }) => {
+      const cv = document.getElementById('cv');
+      cv.width = w; cv.height = h;                               // 换成封面尺寸（画布状态跟着重置）
+      const g = cv.getContext('2d');
+      g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1;
+      await drawCover(g, w, h, size);
+    }, { w, h, size }).catch(e => { throw new Error(`画 ${size} 封面出错：${e.message}`); });
+    let buf = null, q = 0;
+    for (q of COVER_Q) {
+      const b64 = await page.evaluate((qq) => document.getElementById('cv').toDataURL('image/jpeg', qq).slice(23), q);
+      buf = Buffer.from(b64, 'base64');
+      if (buf.length <= COVER_MAX) break;
+    }
+    const out = path.join(WORK, `${PJ.cfg.name}_封面_${size}.jpg`);
+    const had = fs.existsSync(out);
+    fs.writeFileSync(out, buf);
+    const over = buf.length > COVER_MAX ? `，降到最低质量还是超过 ${COVER_MAX / 1048576}MB，画面细碎的纹理要减少` : '';
+    console.log(`封面 ${size}（${w}×${h}）：${out}  ${(buf.length / 1048576).toFixed(2)}MB，质量 ${q}${had ? '（换掉了同名的旧图）' : ''}${over}`);
+  }
+  const missing = await page.evaluate(() => window.getMissing());
+  if (missing.length) console.log('缺失资源:', missing.join(', '));
+  if (logs.length) console.log('页面警告:\n' + [...new Set(logs)].slice(0, 30).join('\n'));
+  await browser.close(); srv.close();
+}
+
 // ---------- 导出音效事件表（给 make_audio.py 合成音效轨） ----------
 async function exportSfx() {
   const srv = await startServer();
@@ -563,18 +659,20 @@ async function main() {
 1. 渲染全片（并行，中断后可续渲）
 2. 渲染片段（输入起止秒）
 3. 抽帧检查（输入时间点）
+12. 改动预览图（按用户意见改了画面后：输入标题和改动处的时间点，拼成一张图放顶层 第X稿${CHANGE_TAG}_<标题>.png 给用户看）
 4. 导出音效事件表
 5. 出片（横版 6 分钟以内 1080P、超过 720P，竖版 1080×1920：无字幕版；有字幕的项目同时出 _字幕 版）
 6. 启动预览服务器
 7. 成片质检
 8. 抽取实机片段帧（project.json 的 clips）
+13. 出封面（输入比例：当前稿 ${COVER_DIR}/${COVER_JS} 每个比例画一张，出到顶层 <片名>_封面_<比例>.jpg）
 （配乐、音效、混音：在工作目录里运行 audio/make_audio.py）`);
   const ch = await ask('请选择: ');
   if (ch === '10') textsToUtf8();
   else if (ch === '9') await txtToSrt();
   else if (ch === '11') await previewVoice();
   else if (ch === '0') { await initProject(); }
-  else if ('12345678'.includes(ch) && ch) {
+  else if (['1', '2', '3', '4', '5', '6', '7', '8', '12', '13'].includes(ch)) {
     loadProject();
     if (ch === '1') await renderAll();
     else if (ch === '2') { const [a, b] = (await ask('起止秒(如 0,30): ')).split(',').map(Number); await renderAll(a, b); }
@@ -588,6 +686,8 @@ async function main() {
     }
     else if (ch === '7') await qaFinal();
     else if (ch === '8') extractClips();
+    else if (ch === '12') await changePreview();
+    else if (ch === '13') await exportCovers();
   }
   if (rl) rl.close();
   console.log(END_MARK);
