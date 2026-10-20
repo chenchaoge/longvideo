@@ -30,10 +30,10 @@ const FPS = 30;
 const WORKERS = 2;                                            // 并行渲染进程数（内存紧张，取 2）
 const SEG_FRAMES = 900;                                       // 每个分段帧数（30 秒）
 const JPEG_Q = 0.95;
-// 出片格式标准（详见 references/视频动画出片格式标准.md）：横版 6 分钟以内 1080P、超过 720P，竖版 1080×1920；30 帧、x264 slow + 动画优化 + CRF 23、AAC 256k
+// 出片格式标准（详见 references/视频动画出片格式标准.md）：横竖版都是 5 分钟以内 1080P、超过 720P；30 帧、x264 slow + 动画优化 + CRF 23、AAC 256k
 const CANVAS = { 横版: [1920, 1080], 竖版: [1080, 1920] };      // 母版画布（project.json 的 orientation）
-const SMALL_AFTER = 360;                                      // 横版成片超过这么多秒就缩到 720P（控制体积，免得平台二次压缩）；不超过的不缩，出 1080P
-const SMALL_SIZE = [1280, 720];
+const SMALL_AFTER = 300;                                      // 成片超过这么多秒就缩到 720P（横竖版一样；控制体积，免得平台二次压缩）；不超过的不缩，出 1080P
+const SMALL_SIZE = { 横版: [1280, 720], 竖版: [720, 1280] };
 const X264_STD = ['-c:v', 'libx264', '-preset', 'slow', '-tune', 'animation', '-crf', '23', '-pix_fmt', 'yuv420p'];
 const AUDIO_STD = ['-c:a', 'aac', '-b:a', '256k'];
 const PREVIEW_FILE = '配音字幕预览.mp4';                          // 第 4 步对齐后给用户看的预览（放顶层）；只有配音没经过剪映的 B 才出，A1、A2 让用户在剪映草稿里看
@@ -41,8 +41,8 @@ const PREVIEW_SIZE = { 横版: [1280, 720], 竖版: [720, 1280] };    // 预览�
 const PREVIEW_X264 = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '28', '-pix_fmt', 'yuv420p'];
 const CHANGE_TAG = '改动预览';                                  // 按用户意见改了画面后给用户看的预览图：顶层 <第X稿>改动预览_<标题>.png（第 9 步清理会删，名字要和 clean.mjs 一致）
 const CHANGE_COLS = { 横版: 2, 竖版: 4 };                        // 改动预览图每行几张（每张按画布一半大小）
-const COVER_SIZES = { '16比9': [1920, 1080], '4比3': [1440, 1080], '3比4': [1080, 1440] };   // 封面比例和像素（第 7 步，见 references/做封面.md）
-const COVER_DIR = '封面', COVER_JS = '封面.js';                 // 封面脚本：当前稿目录/封面/封面.js（菜单 0 复制下一稿时跟着带过去）
+const COVER_SIZES = { '16比9': [1920, 1080], '4比3': [1440, 1080], '3比4': [1080, 1440], '9比16': [1080, 1920] };   // 封面比例和像素（第 7 步，见 references/做封面.md）
+const COVER_DIR = '封面制作', COVER_RE = /^封面_(\d+)\.js$/;     // 封面脚本：工程文件/封面制作/封面_<版本号>.js，一版一个、旧版不删；目录第 7 步定了要做封面才建，这里不建
 const COVER_MAX = 2 * 1024 * 1024;                            // 封面上限 2MB（YouTube 的限制，三个平台都按它）
 const COVER_Q = [0.92, 0.87, 0.82, 0.77, 0.72];               // 封面 JPG 质量，超过上限就往下降一档
 const QA_SPOTS = 9;                                           // 质检时全片均匀抽帧张数
@@ -454,17 +454,21 @@ async function changePreview() {
   await browser.close(); srv.close();
 }
 
-// ---------- 封面（第 7 步）：当前稿的 封面/封面.js 按输入的比例各画一张，出到顶层 <片名>_封面_<比例>.jpg ----------
-// 封面脚本在动画页面里、所有场景脚本之后加载，提供 drawCover(g, w, h, size)：画布已换成这个比例的尺寸（w×h），场景脚本里的函数、图片都能用
-// 不放进 project.json、场景脚本/：改封面不会让已渲好的画面作废
+// ---------- 封面（第 7 步）：工程文件/封面制作/ 里号最大的 封面_<版本号>.js 按输入的比例各画一张，出到顶层 <片名>_封面_<比例>_<版本号>.jpg ----------
+// 封面脚本在当前稿的动画页面里、所有场景脚本之后加载，提供 drawCover(g, w, h, size)：画布已换成这个比例的尺寸（w×h），场景脚本里的函数、图片都能用
+// 不放进 project.json、场景脚本/：改封面不会让已渲好的画面作废；图名带版本号，旧版的图不会被盖掉
 async function exportCovers() {
   const names = Object.keys(COVER_SIZES).join('、');
   const sizes = (await ask(`封面比例（逗号分隔，可选 ${names}）: `)).split(/[,，、\s]+/).filter(Boolean);
   if (!sizes.length) throw new Error(`要输入封面比例，如 4比3,3比4（可选 ${names}）`);
   const bad = sizes.filter(s => !COVER_SIZES[s]);
   if (bad.length) throw new Error(`认不出的比例：${bad.join('、')}（只能是 ${names}）`);
-  const sp = path.join(PJ.draft, COVER_DIR, COVER_JS);
-  if (!fs.existsSync(sp)) throw new Error(`封面脚本不存在：${sp}`);
+  const dir = path.join(WORK, ENG_DIR, COVER_DIR);
+  const vers = fs.existsSync(dir) ? fs.readdirSync(dir).map(f => COVER_RE.exec(f)).filter(Boolean).map(m => +m[1]) : [];
+  if (!vers.length) throw new Error(`没有封面脚本：要先建 ${dir}，写第一版 封面_1.js（之后每改一版另存 封面_2.js……）`);
+  const ver = Math.max(...vers);
+  const sp = path.join(dir, `封面_${ver}.js`);
+  console.log(`封面脚本：第 ${ver} 版 ${sp}`);
   const srv = await startServer();
   const { browser, page, logs } = await openPage(srv.address().port);
   await page.evaluate(() => window.framePNG(0));               // 先走一帧，图片、字体都备好
@@ -486,11 +490,11 @@ async function exportCovers() {
       buf = Buffer.from(b64, 'base64');
       if (buf.length <= COVER_MAX) break;
     }
-    const out = path.join(WORK, `${PJ.cfg.name}_封面_${size}.jpg`);
+    const out = path.join(WORK, `${PJ.cfg.name}_封面_${size}_${ver}.jpg`);
     const had = fs.existsSync(out);
     fs.writeFileSync(out, buf);
     const over = buf.length > COVER_MAX ? `，降到最低质量还是超过 ${COVER_MAX / 1048576}MB，画面细碎的纹理要减少` : '';
-    console.log(`封面 ${size}（${w}×${h}）：${out}  ${(buf.length / 1048576).toFixed(2)}MB，质量 ${q}${had ? '（换掉了同名的旧图）' : ''}${over}`);
+    console.log(`封面 ${size}（${w}×${h}）：${out}  ${(buf.length / 1048576).toFixed(2)}MB，质量 ${q}${had ? `（换掉了第 ${ver} 版同名的旧图）` : ''}${over}`);
   }
   const missing = await page.evaluate(() => window.getMissing());
   if (missing.length) console.log('缺失资源:', missing.join(', '));
@@ -534,7 +538,7 @@ function extractClips() {
   }
 }
 
-// ---------- 出片（按出片格式标准：渲染母版 + 混音 → 横版超过 6 分钟缩到 720P，其余不缩）：无字幕版（导入剪映用）；有字幕的项目再出一版烧好字幕的 ----------
+// ---------- 出片（按出片格式标准：渲染母版 + 混音 → 超过 5 分钟缩到 720P（横竖版一样），5 分钟以内不缩）：无字幕版（导入剪映用）；有字幕的项目再出一版烧好字幕的 ----------
 function mediaDur(f) {                                        // ffprobe 读媒体时长（秒），读不出返回 NaN
   const r = spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', f], { encoding: 'utf8' });
   return Number((r.stdout || '').trim());
@@ -553,7 +557,7 @@ function exportFinal() {
   for (const f of [v, a]) if (!fs.existsSync(f)) throw new Error('缺少 ' + f + '（先渲染全片、做完混音）');
   const dur = mediaDur(v);
   if (!(dur > 0)) throw new Error('读不出母版时长: ' + v);
-  const size = PJ.cfg.orientation === '横版' && dur > SMALL_AFTER ? SMALL_SIZE : null;   // 竖版、6 分钟以内的横版都不缩
+  const size = dur > SMALL_AFTER ? SMALL_SIZE[PJ.cfg.orientation] : null;   // 5 分钟以内不缩
   console.log(`全片 ${dur.toFixed(1)} 秒，成片 ${(size || CANVAS[PJ.cfg.orientation]).join('×')}`);
   const n = outSeq() + 1;                                     // 新序号 = 已有最大序号 + 1，两版同号
   encodeFinal(v, a, outFile(n), size);
@@ -661,11 +665,11 @@ async function main() {
 3. 抽帧检查（输入时间点）
 12. 改动预览图（按用户意见改了画面后：输入标题和改动处的时间点，拼成一张图放顶层 第X稿${CHANGE_TAG}_<标题>.png 给用户看）
 4. 导出音效事件表
-5. 出片（横版 6 分钟以内 1080P、超过 720P，竖版 1080×1920：无字幕版；有字幕的项目同时出 _字幕 版）
+5. 出片（横竖版都是 5 分钟以内 1080P、超过 720P：无字幕版；有字幕的项目同时出 _字幕 版）
 6. 启动预览服务器
 7. 成片质检
 8. 抽取实机片段帧（project.json 的 clips）
-13. 出封面（输入比例：当前稿 ${COVER_DIR}/${COVER_JS} 每个比例画一张，出到顶层 <片名>_封面_<比例>.jpg）
+13. 出封面（输入比例：${ENG_DIR}/${COVER_DIR}/ 里号最大的 封面_<版本号>.js 每个比例画一张，出到顶层 <片名>_封面_<比例>_<版本号>.jpg）
 （配乐、音效、混音：在工作目录里运行 audio/make_audio.py）`);
   const ch = await ask('请选择: ');
   if (ch === '10') textsToUtf8();
