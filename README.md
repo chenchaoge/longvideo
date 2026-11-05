@@ -78,7 +78,7 @@ pip install -r requirements.txt
 | 作者 | 陈朝歌chen |
 | GitHub | [chenchaoge](https://github.com/chenchaoge) |
 | 抖音 | [陈朝歌chen](https://www.douyin.com/user/MS4wLjABAAAAkZOGJtVUaec6vsz1qgF_xnYhgNRvZVoON--_Zl7sGw94dOK2neTeOauA3RYIbD72?from_tab_name=main&vid=7689842892655209125) |
-| 推特 X | [陈朝歌chen](https://x.com/chenchaoge1900) |
+| 推特 X | [陈朝歌chen](https://x.com/chenchaoge) |
 
 ## 许可证
 
