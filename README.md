@@ -81,7 +81,7 @@ pip install -r requirements.txt
 
 ## 许可证
 
-代码和文档：MIT，见 [LICENSE](LICENSE)。
+代码和文档：PolyForm Noncommercial 1.0.0，可以免费使用、修改、分享，不可商用，见 [LICENSE](LICENSE)。
 
 例外：`scripts/fonts/NotoSansSC-Bold.ttf` 是思源黑体粗体，沿用 SIL OFL 1.1 许可，见 [scripts/fonts/OFL.txt](scripts/fonts/OFL.txt)。
 
@@ -89,7 +89,7 @@ pip install -r requirements.txt
 
 <div align="center">
 
-MIT License © [chenchaoge](https://github.com/chenchaoge)
+PolyForm Noncommercial License 1.0.0 © [chenchaoge](https://github.com/chenchaoge)
 
 </div>
 

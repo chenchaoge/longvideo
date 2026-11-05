@@ -1,7 +1,7 @@
 {
   "name": "longvideo",
   "private": true,
-  "license": "MIT",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "dependencies": {
     "playwright-core": "^1.63.0"
   }
