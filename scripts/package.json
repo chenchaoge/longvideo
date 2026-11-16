@@ -1,7 +1,8 @@
 {
   "name": "longvideo",
   "private": true,
-  "license": "PolyForm-Noncommercial-1.0.0",
+  "author": "陈朝歌chen",
+  "license": "SEE LICENSE IN LICENSE",
   "dependencies": {
     "playwright-core": "^1.63.0"
   }

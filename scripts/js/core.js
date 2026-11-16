@@ -1,7 +1,7 @@
 'use strict';
 // ================= 动画引擎核心：常量 / 数学 / 时间轴元素系统 / 声音事件 =================
 // 只提供底层能力，不带任何画面样式：背景、配色、入退场、镜头运动、转场、特效都由每条视频的场景脚本自己写
-const cv = document.getElementById('cv');         // 画布尺寸由 render.mjs 按 project.json 的 orientation 写进 index.html：横版 1920×1080，竖版 1080×1920
+const cv = document.getElementById('lvcg');         // 画布尺寸由 render.mjs 按 project.json 的 orientation 写进 index.html：横版 1920×1080，竖版 1080×1920
 const ctx = cv.getContext('2d');
 const W = cv.width, H = cv.height, FPS = 30;
 const PORTRAIT = H > W;                           // 竖版

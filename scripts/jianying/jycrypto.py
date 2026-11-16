@@ -39,7 +39,7 @@ def install_dir():
     版本目录优先用注册表登记的版本号，没有就取版本号最大的"""
     s = uninstall_value('UninstallString')
     if not s:
-        raise CryptoError('注册表里没有剪映专业版的安装信息：电脑上没装剪映专业版')
+        raise CryptoError('注册表里没有电脑版剪映的安装信息：没装电脑版剪映')
     root = os.path.dirname(s.strip().strip('"'))
     ver = uninstall_value('DisplayVersion')
     if ver and os.path.isfile(os.path.join(root, ver, DLL)):

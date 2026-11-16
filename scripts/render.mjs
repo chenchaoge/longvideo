@@ -1,10 +1,12 @@
 // ================= 动画工具（菜单启动）：文本转 UTF-8 / 文稿转字幕 / 配音字幕预览 / 初始化项目 / 并行渲染 / 抽帧检查 / 改动预览图 / 导出音效表 / 出片 / 预览 / 成片质检 / 出封面 =================
+// 作者：陈朝歌chen（GitHub chenchaoge）
 // 在用户工作目录里运行（cd 过去再 node <本脚本>）：工作目录 = 一条视频，用户只准备 文稿（任何格式）和素材；
 // 要给用户看的（超长字幕清单、配音字幕预览、改动预览图、成片、封面）放工作目录顶层，其余都放 工程文件/：各稿通用的（开场核对、进度记录、初版 SRT、剪映导出的配音和 SRT）放 工程文件/ 下，随稿变化的（动画大纲、project.json、AI 写的字幕、场景脚本/、中间文件/）放 工程文件/第N稿文件/
 // 配乐、音效、混音另用 audio/make_audio.py
 import http from 'node:http';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
 import { spawn, spawnSync } from 'node:child_process';
@@ -25,7 +27,8 @@ const notDraft = f => !path.parse(f).name.endsWith(DRAFT_TAG);   // 找对齐好
 const LONG_FILE = `超过每行${WARN_LEN}个字的字幕.txt`;               // 超长清单的文件名（放工作目录顶层）
 const END_MARK = '【结束】', ERR_MARK = '【出错】';                 // 程序最后一行打印其中一个，调用方只认这两个判断跑完没有
 const CHECK_FILE = '开场核对.json';                              // 开场核对结果（在 工程文件/ 里），菜单 9 从这里取要转字幕的稿：voiceScript（要念的文字稿），没有就用 script（整篇文稿，只认 TXT）
-const EDGE = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
+const OS_NAME = { win32: 'Windows', darwin: 'Mac' }[process.platform];   // 只支持 Windows、Mac；和 browsers.json 的键一致
+const BROWSERS = path.join(ROOT, 'browsers.json');               // 渲染用的浏览器：各系统按顺序找的位置（开工检查 start_check.py 也读它）
 const FPS = 30;
 const WORKERS = 2;                                            // 并行渲染进程数（内存紧张，取 2）
 const SEG_FRAMES = 900;                                       // 每个分段帧数（30 秒）
@@ -109,8 +112,9 @@ const SUB_STYLE = 'FontName=Noto Sans SC,Bold=1,PrimaryColour=&H00FFFFFF,Outline
 const TEXT_EXT = ['.txt', '.md', '.srt', '.csv'];
 const BACKUP_DIR = '原编码备份';                                 // 转换前的原件放 工程文件/原编码备份/（保持原来的相对路径）
 let ANSI = null;
-function ansiEncoding() {                                     // 系统 ANSI 编码（记事本「ANSI」存的就是它）：简体中文 Windows 是 936，即 GBK
+function ansiEncoding() {                                     // 不是 UTF-8 的文本按什么解：Windows 取系统 ANSI 编码（记事本「ANSI」存的就是它，简体中文是 936 即 GBK）
   if (ANSI) return ANSI;
+  if (OS_NAME === 'Mac') return (ANSI = { label: 'gb18030', name: 'GBK' });   // Mac 自己存的文本都是 UTF-8，不是的基本是 Windows 电脑传来的，按 GBK 解
   const r = spawnSync('reg', ['query', 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Nls\\CodePage', '/v', 'ACP'], { encoding: 'utf8' });
   const cp = ((r.stdout || '').match(/ACP\s+REG_SZ\s+(\d+)/) || [])[1];
   if (!cp) throw new Error('读不出系统的 ANSI 编码（注册表 Nls\\CodePage 的 ACP）');
@@ -283,8 +287,16 @@ function startServer(port = 0) {
   return new Promise(res => srv.listen(port, '127.0.0.1', () => res(srv)));
 }
 
+function browserPath() {                                      // browsers.json 里本系统第一个存在的浏览器
+  if (!OS_NAME) throw new Error(`只支持 Windows 和 Mac，这台电脑是 ${process.platform}`);
+  const list = JSON.parse(fs.readFileSync(BROWSERS, 'utf8'))[OS_NAME] || [];
+  const found = list.map(p => p.replace(/^~(?=\/)/, os.homedir())).find(p => fs.existsSync(p));
+  if (!found) throw new Error(`没找到渲染用的浏览器：照 references/装软件.md 装好再跑（找过的位置见 ${BROWSERS}）`);
+  return found;
+}
+
 async function openPage(port) {
-  const browser = await chromium.launch({ executablePath: EDGE, headless: true, args: ['--disable-gpu-vsync', '--force-device-scale-factor=1'] });
+  const browser = await chromium.launch({ executablePath: browserPath(), headless: true, args: ['--disable-gpu-vsync', '--force-device-scale-factor=1'] });
   const [w, h] = CANVAS[PJ.cfg.orientation];
   const page = await browser.newPage({ viewport: { width: w, height: h } });
   const logs = [];
@@ -425,7 +437,7 @@ async function changePreview() {
   const srv = await startServer();
   const { browser, page, logs } = await openPage(srv.address().port);
   const b64 = await page.evaluate(async ({ pts, cols }) => {
-    const cv = document.getElementById('cv'), CAP = 64;       // CAP：每帧上面写说明的那条的高度
+    const cv = document.querySelector('canvas'), CAP = 64;      // CAP：每帧上面写说明的那条的高度
     const fw = Math.round(cv.width / 2), fh = Math.round(cv.height / 2), n = Math.min(cols, pts.length);
     const sheet = document.createElement('canvas');
     sheet.width = fw * n; sheet.height = (fh + CAP) * Math.ceil(pts.length / n);
@@ -478,7 +490,7 @@ async function exportCovers() {
   for (const size of sizes) {
     const [w, h] = COVER_SIZES[size];
     await page.evaluate(async ({ w, h, size }) => {
-      const cv = document.getElementById('cv');
+      const cv = document.querySelector('canvas');
       cv.width = w; cv.height = h;                               // 换成封面尺寸（画布状态跟着重置）
       const g = cv.getContext('2d');
       g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1;
@@ -486,7 +498,7 @@ async function exportCovers() {
     }, { w, h, size }).catch(e => { throw new Error(`画 ${size} 封面出错：${e.message}`); });
     let buf = null, q = 0;
     for (q of COVER_Q) {
-      const b64 = await page.evaluate((qq) => document.getElementById('cv').toDataURL('image/jpeg', qq).slice(23), q);
+      const b64 = await page.evaluate((qq) => document.querySelector('canvas').toDataURL('image/jpeg', qq).slice(23), q);
       buf = Buffer.from(b64, 'base64');
       if (buf.length <= COVER_MAX) break;
     }
@@ -651,7 +663,7 @@ async function qaFinal() {
   spawnSync('ffmpeg', ['-v', 'error', '-y', '-framerate', '1', '-i', path.join(dir, 'q_%03d.png'), '-vf', 'tile=3x3:padding=4',
     path.join(dir, 'sheet_%02d.png')], { stdio: 'inherit' });
   const skip = pts.length - got;
-  console.log(`抽帧 ${got} 张（来源 ${path.basename(src)}）${skip ? `，${skip} 个点在片头之前、片尾之后或没抽到，已跳过` : ''}，总览图：${dir}\\sheet_*.png`);
+  console.log(`抽帧 ${got} 张（来源 ${path.basename(src)}）${skip ? `，${skip} 个点在片头之前、片尾之后或没抽到，已跳过` : ''}，总览图：${path.join(dir, 'sheet_*.png')}`);
 }
 
 async function main() {

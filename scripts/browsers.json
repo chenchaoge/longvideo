@@ -1,0 +1,13 @@
+{
+  "说明": "渲染画面用的浏览器：按系统从上往下找，第一个存在的就用；~ 是用户主目录。render.mjs 渲染、start_check.py 开工检查都读这里，改位置只改这一处",
+  "Windows": [
+    "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+    "C:/Program Files/Microsoft/Edge/Application/msedge.exe"
+  ],
+  "Mac": [
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    "~/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "~/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+  ]
+}

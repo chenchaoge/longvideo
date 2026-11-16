@@ -1,4 +1,4 @@
 numpy>=2.2
 scipy>=1.16
-pyJianYingDraft~=0.3.0
+pyJianYingDraft~=0.3.0; sys_platform == "win32"
 opencv-python>=4.10

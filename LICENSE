@@ -1,81 +1,63 @@
-Required Notice: Copyright (c) 2026 chenchaoge (https://github.com/chenchaoge)
+# longvideo 版权与使用条款
 
-# PolyForm Noncommercial License 1.0.0
+版权所有 © 2026 陈朝歌chen（chenchaoge）。保留所有权利。
 
-<https://polyformproject.org/licenses/noncommercial/1.0.0>
+生效日期：2026-11-17
 
-## Acceptance
+## 1. 版权归属
 
-In order to get any license under these terms, you must agree to them as both strict obligations and conditions to all your licenses.
+1.1 本仓库（longvideo）中的全部内容，包括 SKILL.md、规则文档、脚本、画面引擎、示例动图，版权归陈朝歌chen 所有，保留所有权利，本条款第 5 条所列内容除外。
 
-## Copyright License
+1.2 除本条款明确授予的权利外，作者不授予任何其他权利。
 
-The licensor grants you a copyright license for the software to do everything you might do with the software that would otherwise infringe the licensor's copyright in it for any permitted purpose.  However, you may only distribute the software according to [Distribution License](#distribution-license) and make changes or new works based on the software according to [Changes and New Works License](#changes-and-new-works-license).
+## 2. 有限使用许可
 
-## Distribution License
+在遵守本条款的前提下，作者授予你以下非独占、不可转让、不可再许可的权利：
 
-The licensor grants you an additional copyright license to distribute copies of the software.  Your license to distribute covers distributing the software with changes and new works permitted by [Changes and New Works License](#changes-and-new-works-license).
+2.1 阅读本仓库内容。
 
-## Notices
+2.2 安装 Skill，把它复制到你自己的设备上。
 
-You must ensure that anyone who gets a copy of any part of the software from you also gets a copy of these terms or the URL for them above, as well as copies of any plain-text lines beginning with `Required Notice:` that the licensor provided with the software.  For example:
+2.3 在个人事务或你自己的业务中使用 Skill，包括给你自己的账号做视频，以及用 Skill 做出的视频获得收入。
 
-> Required Notice: Copyright Yoyodyne, Inc. (http://example.com)
+2.4 在为你自己的客户提供服务时使用 Skill，例如代做视频、代运营账号。你可以把 Skill 做出的成片、封面、文案交付给客户，但不得把 Skill 文件本身提供给客户。
 
-## Changes and New Works License
+2.5 在你自己的设备上修改 Skill，修改后的版本仅供你自己使用。
 
-The licensor grants you an additional copyright license to make changes and new works based on the software for any permitted purpose.
+## 3. 禁止事项
 
-## Patent License
+未经作者书面许可，任何人不得：
 
-The licensor grants you a patent license for the software that covers patent claims the licensor can license, or becomes able to license, that you would infringe by using the software.
+3.1 把本仓库内容打包进其他 Skill 合集、产品或课程，或作为赠品提供。
 
-## Noncommercial Purposes
+3.2 出售本仓库内容，或以收费方式向他人提供本仓库内容本身。
 
-Any noncommercial purpose is a permitted purpose.
+3.3 公开发布本仓库内容的修改版。
 
-## Personal Uses
+3.4 去除或修改本仓库内容中的署名和版权声明。
 
-Personal use for research, experiment, and testing for the benefit of public knowledge, personal study, private entertainment, hobby projects, amateur pursuits, or religious observance, without any anticipated commercial application, is use for a permitted purpose.
+3.5 使用本仓库内容训练或微调人工智能模型。
 
-## Noncommercial Organizations
+3.6 把 Skill 部署成供他人调用的服务（包括但不限于 agent、小程序、API 等），无论是否收费、是否署名。
 
-Use by any charitable organization, educational institution, public research organization, public safety or health organization, environmental protection organization, or government institution is use for a permitted purpose regardless of the source of funding or obligations resulting from the funding.
+分享本仓库的链接不受本条限制。
 
-## Fair Use
+## 4. GitHub 平台上的浏览与 fork
 
-You may have "fair use" rights for the software under the law. These terms do not limit them.
+4.1 GitHub 用户协议允许的浏览和 fork 不受本条款影响。
 
-## No Other Rights
+4.2 你不会因浏览或 fork 获得第 2 条以外的任何权利。fork 后的副本仍受本条款约束。
 
-These terms do not allow you to sublicense or transfer any of your licenses to anyone else, or prevent the licensor from granting licenses to anyone else.  These terms do not imply any other licenses.
+## 5. 第三方内容
 
-## Patent Defense
+5.1 `scripts/fonts/NotoSansSC-Bold.ttf` 是思源黑体粗体（Noto Sans SC），继续按 SIL Open Font License 1.1 使用，见 `scripts/fonts/OFL.txt`。
 
-If you make any written claim that the software infringes or contributes to infringement of any patent, your patent license for the software granted under these terms ends immediately. If your company makes such a claim, your patent license ends immediately for work on behalf of your company.
+5.2 `scripts/jianying/jycrypto.py` 调用剪映加解密函数的做法参考了开源项目 jy-draftc（github.com/wenshui330/jy-draftc，MIT 许可）。
 
-## Violations
+## 6. 许可终止
 
-The first time you are notified in writing that you have violated any of these terms, or done anything with the software not covered by your licenses, your licenses can nonetheless continue if you come into full compliance with these terms, and take practical steps to correct past violations, within 32 days of receiving notice.  Otherwise, all your licenses end immediately.
+你违反本条款的，第 2 条授予你的权利自动终止。
 
-## No Liability
+## 7. 适用法律
 
-***As far as the law allows, the software comes as is, without any warranty or condition, and the licensor will not be liable to you for any damages arising out of these terms or the use or nature of the software, under any kind of legal claim.***
-
-## Definitions
-
-The **licensor** is the individual or entity offering these terms, and the **software** is the software the licensor makes available under these terms.
-
-**You** refers to the individual or entity agreeing to these terms.
-
-**Your company** is any legal entity, sole proprietorship, or other kind of organization that you work for, plus all organizations that have control over, are under the control of, or are under common control with that organization.  **Control** means ownership of substantially all the assets of an entity, or the power to direct its management and policies by vote, contract, or otherwise.  Control can be direct or indirect.
-
-**Your licenses** are all the licenses granted to you for the software under these terms.
-
-**Use** means anything you do with the software requiring one of your licenses.
-
----
-
-scripts/fonts/NotoSansSC-Bold.ttf is not covered by the PolyForm Noncommercial License above.
-It is Noto Sans SC (Bold instance), licensed under the SIL Open Font License,
-Version 1.1. See scripts/fonts/OFL.txt.
+本条款适用中华人民共和国法律。

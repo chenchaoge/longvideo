@@ -77,7 +77,7 @@ def draft_root():
             return root
     root = search_root()
     if not root:
-        raise SystemExit('全盘都没找到剪映草稿目录：先打开剪映专业版新建一个草稿，再重试')
+        raise SystemExit('全盘都没找到剪映草稿目录：先打开电脑版剪映新建一个草稿，再重试')
     print(f'剪映草稿目录（全盘查找）：{root}')
     return root
 
