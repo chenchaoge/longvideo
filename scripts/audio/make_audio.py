@@ -9,6 +9,7 @@
 混音：有配音 = 人声 + 配乐（自动给人声让位）+ 音效 + 采样；无配音 = 配乐 + 音效 + 采样，电平看 project.json 的 mix"""
 import importlib.util
 import json
+import math
 import os
 import re
 import subprocess
@@ -30,8 +31,12 @@ BUILD_DIR = '中间文件'                                         # 每稿目�
 CN_DIGIT = '零一二三四五六七八九'
 PJ = {}                                                       # 当前项目：dir 工作目录、cfg 配置、build 中间文件目录
 
-MUSIC_DB = -14.0       # 配乐相对人声（说话段 RMS）的电平
-DUCK = 0.55            # 说话时配乐再压低的比例（约 -7dB）
+MUSIC_DB = -13.0       # 没人说话时配乐相对人声（说话段 RMS）的电平
+DUCK = 0.29            # 说话时配乐再压低的比例（-3dB，说话时合计比人声低 16dB）
+GAP_QUIET = -MUSIC_DB  # 混音后核对：无话段配乐要比人声低几 dB
+GAP_SPEAK = GAP_QUIET - 20 * math.log10(1 - DUCK)   # 说话段要低几 dB（16）
+GAP_TOL = 1.0          # 核对容差 dB，超过报【出错】
+QUIET_MIN_SEC = 1.0    # 无话段加起来不到这么多秒就不核无话段
 TARGET_LUFS = -14.0    # 成片响度
 LIMIT_DB = -4.0        # 无配音项目混音的峰值限制线（留足真峰值余量，loudnorm 才会整体等比放大而不是动态压缩）
 XFADE = 0.03           # project.json cuts 剪掉时间段后，拼接处的交叉淡化秒数
@@ -341,7 +346,8 @@ def make_mix():
     m_rms = float(np.sqrt(np.mean(m ** 2)))
     mg = v_rms * 10 ** ((MUSIC_DB + mx['music']) / 20) / max(1e-9, m_rms)
     ducks = load_ducks()
-    duck = (1 - DUCK * act) * duck_env(ducks, n)                         # 说话时自动让位，再叠上场景登记的闪避段
+    scene_duck = duck_env(ducks, n)
+    duck = (1 - DUCK * act) * scene_duck                                 # 说话时自动让位，再叠上场景登记的闪避段
     music = m * mg * duck[:, None]
     sfx = s * v_peak * 0.9 * 10 ** (mx['sfx'] / 20)
     mix = v + music + sfx + a * 10 ** (mx['samples'] / 20)
@@ -350,20 +356,53 @@ def make_mix():
         mix *= 0.98 / pk
     print(f'人声RMS {20 * np.log10(v_rms):.1f}dB  人声峰值 {20 * np.log10(v_peak):.1f}dB  配乐增益 {20 * np.log10(mg):.1f}dB  '
           f"配乐 {mx['music']:+.0f}dB  音效 {mx['sfx']:+.0f}dB  采样 {mx['samples']:+.0f}dB  闪避 {len(ducks)} 段  混音峰值 {20 * np.log10(pk):.1f}dB")
+    check_music_gap(music, v_rms, speak, act, scene_duck, hop)
     write_wav(bpath('mix_raw.wav'), mix)
     loudnorm(bpath('mix_raw.wav'), bpath('mix.wav'))
     print('混音完成：', bpath('mix.wav'))
 
 
+def check_music_gap(music, v_rms, speak, act, scene_duck, hop):
+    """按实际混出来的配乐轨核对：说话段比人声低 GAP_SPEAK dB、无话段低 GAP_QUIET dB，偏离超过 GAP_TOL 就报错
+    响度标准化是整体等比的，不改这两个差值，所以在 loudnorm 前量"""
+    nf = len(speak)
+    mono = music.mean(axis=1)[: nf * hop]
+    m_frm = np.sqrt(np.mean(mono.reshape(nf, hop) ** 2, axis=1) + 1e-12)   # 每 20ms 一帧的配乐 RMS，和 speak 同一套帧
+    no_scene = scene_duck[::hop][:nf] > 0.999                              # 场景登记的闪避段是另加的压低，不算在内
+    quiet = (act[::hop][:nf] < 0.05) & no_scene                           # 让位完全放开的帧：停够 1 秒多的长段无话
+    speak_ok = speak & no_scene
+    if not speak_ok.any():                                                 # 说话段全在场景登记的闪避段里，没有可核的帧
+        print('配乐核对：说话段都在场景登记的闪避段里，不核')
+        return
+    bad = []
+    gap_speak = 20 * np.log10(v_rms / np.sqrt(np.mean(m_frm[speak_ok] ** 2)))
+    line = f'配乐核对：说话段比人声低 {gap_speak:.1f}dB（目标 {GAP_SPEAK:.0f}）'
+    if abs(gap_speak - GAP_SPEAK) > GAP_TOL:
+        bad.append(f'说话段差 {gap_speak - GAP_SPEAK:+.1f}dB')
+    quiet_sec = quiet.sum() * hop / SR
+    if quiet_sec >= QUIET_MIN_SEC:
+        gap_quiet = 20 * np.log10(v_rms / np.sqrt(np.mean(m_frm[quiet] ** 2)))
+        line += f'  无话段低 {gap_quiet:.1f}dB（目标 {GAP_QUIET:.0f}，共 {quiet_sec:.1f} 秒）'
+        if abs(gap_quiet - GAP_QUIET) > GAP_TOL:
+            bad.append(f'无话段差 {gap_quiet - GAP_QUIET:+.1f}dB')
+    else:
+        line += f'  无话段不到 {QUIET_MIN_SEC:.0f} 秒，不核'
+    print(line)
+    if bad:
+        raise RuntimeError('配乐电平不对：' + '，'.join(bad) + '；查配乐本身在这些段是不是比整体轻或重很多，或 project.json 的 mix.music 是不是被改了')
+
+
 def main():
     print('==== 音频制作 ====\n1. 生成配乐\n2. 生成音效轨\n3. 混音（人声/配乐/音效/采样，响度标准化）\n4. 全部执行\n5. 生成采样轨（游戏原声、实机原声）')
     ch = input('请选择: ').strip()
+    if ch not in ('1', '2', '3', '4', '5'):
+        raise SystemExit('编号无效')                              # 输错编号不能打印【结束】，免得被当成这一步跑成了
     load_project()
     if ch in ('1', '4'):
         make_music()
     if ch in ('2', '4'):
         make_sfx()
-    if ch in ('5', '4') and os.path.exists(bpath('samples.json')):
+    if ch == '5' or (ch == '4' and os.path.exists(bpath('samples.json'))):   # 全部执行时没有采样事件表就跳过采样轨；单选 5 没有就报错
         make_samples()
     if ch in ('3', '4'):
         make_mix()

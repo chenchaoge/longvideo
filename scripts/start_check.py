@@ -153,6 +153,6 @@ def main():
 if __name__ == '__main__':
     try:
         main()
-    except Exception:
+    except Exception as e:
         traceback.print_exc()
-        print(ERR_MARK)
+        print(f'{ERR_MARK}{e}')

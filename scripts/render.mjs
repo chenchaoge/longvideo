@@ -97,7 +97,7 @@ const outSeq = () => {                                        // 工作目录里
     .filter(f => f.startsWith(pre) && f.endsWith('.mp4')).map(f => f.slice(pre.length, -4)).filter(s => /^\d+$/.test(s)).map(Number);
   return ns.length ? Math.max(...ns) : 0;
 };
-const outFile = (n) => path.join(WORK, `${PJ.cfg.name}_${n}.mp4`);           // 无字幕版（导入剪映用）
+const outFile = (n) => path.join(WORK, `${PJ.cfg.name}_${n}.mp4`);           // 无字幕版（要放进剪辑软件再加工时用）
 const subFile = (n) => path.join(WORK, `${PJ.cfg.name}_${n}_字幕.mp4`);      // 带字幕版（有字幕的项目才出）
 // 烧字幕：思源黑体 Bold 白字黑边贴底（fonts/ 里的静态粗体，从系统思源黑体可变字体导出，SIL OFL；系统那个可变字体烧字幕只认得最细一档）
 // 字号、描边、边距按 libass 默认 288 行高换算（字号随画面高度缩放）：横版 21.33 ≈ 720P 画面 53 像素、1080P 画面 80 像素（实测一个字约 55 像素宽，
@@ -223,10 +223,12 @@ function checkOrientation() {                                 // 开场核对记
 async function initDraft(d) {
   fs.mkdirSync(d.dir, { recursive: true });
   const orientation = checkOrientation();
-  const dVoice = await findOne(d.dir, AUDIO_EXT, '配音');          // 非口播类：AI 按剧本把台词摆好位置拼成的配音，在本稿里
-  const voice = dVoice || await findOne(ENG, AUDIO_EXT, '配音');   // 口播类：工程文件/ 里的配音（A1、B 对齐好的，A2 剪映导出的）
-  const dSrt = await findOne(d.dir, ['.srt'], '字幕');             // AI 按剧本写在本稿里的字幕（无配音项目、非口播类）
-  const srt = dSrt || (dVoice ? null : await findOne(ENG, ['.srt'], '字幕', notDraft));   // 口播类：工程文件/ 里的字幕（A1、B 对齐好的，A2 剪映导出的），各稿通用；非口播类只认本稿的
+  const dVoice = await findOne(d.dir, AUDIO_EXT, '配音');          // 本稿里拼好的配音（和全片一样长）：非口播类按剧本摆的台词，或口播类视频比配音长时句子之间插了空档的
+  const voice = dVoice || await findOne(ENG, AUDIO_EXT, '配音');   // 口播类视频和配音一样长：工程文件/ 里的配音（A1、B 对齐好的，A2 剪映导出的）
+  const dSrt = await findOne(d.dir, ['.srt'], '字幕');             // AI 写在本稿里的字幕（无配音项目、非口播类、口播类视频比配音长的）
+  const srt = dSrt || (dVoice ? null : await findOne(ENG, ['.srt'], '字幕', notDraft));   // 口播类视频和配音一样长：工程文件/ 里的字幕（A1、B 对齐好的，A2 剪映导出的），各稿通用；本稿里拼了配音的只认本稿的字幕
+  if (dVoice && !dSrt && JSON.parse(fs.readFileSync(path.join(ENG, CHECK_FILE), 'utf8')).readAll === true)   // 口播类靠字幕时间排画面，漏了本稿字幕会变成没有字幕的项目
+    throw new Error(`口播类在本稿里拼了配音（视频比配音长），本稿里还要有字幕（.srt，时间和拼好的配音对上）：写好再初始化`);
   const voiceFile = voice && path.join(dVoice ? d.dir : ENG, voice);
   let duration;
   if (voice) {
@@ -348,7 +350,7 @@ function renderStamp() {
 async function renderAll(t0s = 0, t1s = null) {
   if (PJ.cfg.voice) {                                         // 配音改过（重新生成某句、加减句子）duration 没跟着改：结尾会被截掉或多出一截
     const vd = mediaDur(path.join(PJ.dir, PJ.cfg.voice));
-    if (Math.abs(vd - PJ.cfg.duration) > 1 / FPS) throw new Error(`配音长 ${vd.toFixed(3)} 秒，project.json 的 duration 是 ${PJ.cfg.duration} 秒，对不上：口播类把 duration 改成 ${vd.toFixed(3)}（视频和配音一样长）；非口播类重新拼本稿的配音，拼到和全片一样长（时长不变）`);
+    if (Math.abs(vd - PJ.cfg.duration) > 1 / FPS) throw new Error(`配音长 ${vd.toFixed(3)} 秒，project.json 的 duration 是 ${PJ.cfg.duration} 秒，对不上：口播类视频和配音一样长的，把 duration 改成 ${vd.toFixed(3)}；非口播类、口播类视频比配音长的，重新拼本稿的配音，拼到和全片一样长（时长不变）`);
   }
   const chunkDir = path.join(PJ.build, 'chunks');
   fs.mkdirSync(chunkDir, { recursive: true });
@@ -550,7 +552,7 @@ function extractClips() {
   }
 }
 
-// ---------- 出片（按出片格式标准：渲染母版 + 混音 → 超过 5 分钟缩到 720P（横竖版一样），5 分钟以内不缩）：无字幕版（导入剪映用）；有字幕的项目再出一版烧好字幕的 ----------
+// ---------- 出片（按出片格式标准：渲染母版 + 混音 → 超过 5 分钟缩到 720P（横竖版一样），5 分钟以内不缩）：无字幕版（要放进剪辑软件再加工时用）；有字幕的项目再出一版烧好字幕的 ----------
 function mediaDur(f) {                                        // ffprobe 读媒体时长（秒），读不出返回 NaN
   const r = spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', f], { encoding: 'utf8' });
   return Number((r.stdout || '').trim());
@@ -607,7 +609,7 @@ function subFilter(file, orientation) {                       // 烧字幕滤镜
 async function previewVoice() {
   const orientation = checkOrientation();
   const voice = await findOne(ENG, AUDIO_EXT, '配音'), srt = await findOne(ENG, ['.srt'], '字幕', notDraft);
-  if (!voice || !srt) throw new Error(`${ENG_DIR}/ 里要有对齐好的配音和字幕（.srt，初版不算）：A1 先跑 draft.py 菜单 3，A2、B 要用户把剪映导出的放进来`);
+  if (!voice || !srt) throw new Error(`${ENG_DIR}/ 里要有对齐好的配音和字幕（.srt，初版不算）：这个预览只给 B 现成配音用，先把配音和字幕对齐好，出成 ${ENG_DIR}/配音.wav、字幕.srt`);
   const dur = mediaDur(path.join(ENG, voice));
   if (!(dur > 0)) throw new Error('读不出配音时长: ' + voice);
   const out = path.join(WORK, PREVIEW_FILE);
@@ -705,6 +707,7 @@ async function main() {
     else if (ch === '12') await changePreview();
     else if (ch === '13') await exportCovers();
   }
+  else throw new Error('编号无效');                             // 输错编号不能打印【结束】，免得被当成这一步跑成了
   if (rl) rl.close();
   console.log(END_MARK);
   process.exit(0);

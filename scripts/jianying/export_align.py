@@ -22,6 +22,7 @@ OUT_VOICE = os.path.join(ENG, '配音.wav')                       # 对齐的结
 OUT_SUBS = os.path.join(ENG, '字幕.srt')                        # 对齐的结果：按每段配音对齐的字幕
 SIZE = {'横版': (1920, 1080), '竖版': (1080, 1920)}            # 剪映草稿画布
 WARN_LEN = 30                                                 # 字幕超过几个字提醒（汉字算 1，英文数字算半个；与 srt.mjs 一致）
+CN_DIGIT = '零一二三四五六七八九'
 
 
 def ask(q):
@@ -51,6 +52,23 @@ def load_check():
     if ck.get('orientation') not in SIZE:
         raise SystemExit(f'开场核对记录里的横竖版（orientation）只能是 横版 或 竖版，现在是：{ck.get("orientation")}')
     return srt, *SIZE[ck['orientation']]
+
+
+def cn_num(n):
+    """1～99 转中文数字（与 render.mjs 的 cnNum、make_audio.py 的 cn_num 一致）"""
+    if n < 10:
+        return CN_DIGIT[n]
+    return (CN_DIGIT[n // 10] if n >= 20 else '') + '十' + (CN_DIGIT[n % 10] if n % 10 else '')
+
+
+def final_subs():
+    """当前稿（有 project.json 的最大号稿）成片用的字幕文件路径；没有稿、或这一稿没有字幕返回 None"""
+    for n in range(99, 0, -1):
+        f = os.path.join(ENG, f'第{cn_num(n)}稿文件', 'project.json')
+        if os.path.exists(f):
+            rel = json.load(open(f, encoding='utf-8')).get('subs')
+            return os.path.join(WORK, rel) if rel else None
+    return None
 
 
 def choose(items, label):
@@ -212,10 +230,9 @@ def main():
           '出 工程文件/配音.wav、字幕.srt；用了导出的字幕就和初版 SRT 比\n'
           '2. 工程文件/ 里的字幕和初版 SRT 比，列出用户改了哪些字幕')
     fn = {'1': tts_fix, '2': a2_check}.get(ask('请选择: '))
-    if fn:
-        fn()
-    else:
-        print('无效选择')
+    if not fn:
+        raise SystemExit('编号无效')                              # 输错编号不能打印【结束】，免得被当成这一步跑成了
+    fn()
 
 
 def run():

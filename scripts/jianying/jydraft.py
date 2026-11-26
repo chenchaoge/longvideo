@@ -197,9 +197,9 @@ class Draft:
         """素材文件的实际路径（占位符换成本草稿文件夹）"""
         return PLACEHOLDER.sub(lambda m: self.path.replace('\\', '/'), mat.get('path', ''))
 
-    def audio_format(self):
-        """第一段音频文件的 (采样率, 声道)，把整条音频做出来时都按这个"""
-        segs = self.segments('audio', muted=False)
+    def audio_format(self, segs=None):
+        """第一段音频文件的 (采样率, 声道)，把整条音频做出来时都按这个；segs 不给就取没静音的音频片段"""
+        segs = segs or self.segments('audio', muted=False)
         if not segs:
             raise SystemExit(f'草稿「{self.name}」里没有音频')
         return tts_align.probe(self.media_path(self.material(segs[0])))[:2]
@@ -259,9 +259,10 @@ def clip_audio(d, seg, sr, ch):
     return x * np.float32(gain(d, seg))
 
 
-def mixdown(d, out, sr, ch):
-    """草稿里没静音的音频片段按时间线摆好、叠在一起，写成一条 32 位浮点 WAV；叠起来超过满幅就整条降音量；返回时长（秒）"""
-    segs = d.segments('audio', muted=False)
+def mixdown(d, out, sr, ch, segs=None):
+    """音频片段按时间线摆好、叠在一起，写成一条 32 位浮点 WAV；叠起来超过满幅就整条降音量；返回时长（秒）
+    segs 不给就取草稿里没静音的音频片段；成片放进草稿后配音轨是静音的，这时要把配音片段传进来"""
+    segs = segs or d.segments('audio', muted=False)
     total = max(round(sum(tr(s)) * sr / US) for s in segs)
     mix = np.zeros((total, ch), np.float32)
     for s in segs:

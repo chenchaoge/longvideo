@@ -18,12 +18,13 @@ import jycrypto
 import jydraft
 import tts_align
 from export_align import (AUDIO_EXT, ENG, OUT_SUBS, OUT_VOICE, WORK, a2_check, ask, ask_overwrite, changes,
-                          choose, load_check, pick_top, read_check, top_files, tts_fix, vs_first)
+                          choose, final_subs, flat, load_check, pick_top, read_check, top_files, tts_fix, vs_first)
 
 sys.dont_write_bytecode = True
 BACKUP_TAG = '_备份'                                           # 备份原配音草稿的名字后缀
 VIDEO_RE = re.compile(r'(.+)_\d+\.mp4', re.I)                  # 无字幕成片：<片名>_<序号>.mp4（render.mjs 出片的命名）
 START_TOL = 10000                                             # 字幕和配音开头相差这么多微秒以内，算同一句的
+SUB_TOL = 1500                                                # 草稿字幕和成片字幕的起止相差这么多微秒以内算一样（SRT 的时间只到毫秒）
 US = jydraft.US
 
 
@@ -143,7 +144,7 @@ def tts_in_draft():
     old = tts_align.read_srt(OUT_SUBS) if os.path.exists(OUT_SUBS) else []   # 上次对齐的结果，用来比这次改了什么
     texts, names = [d.text(s) for s in subs], [d.material(v).get('name', '') for v in voices]
     diff = changes(old, texts, [n / US for _, n in cues], names) if old else []
-    jydraft.mixdown(d, OUT_VOICE, *d.audio_format())
+    jydraft.mixdown(d, OUT_VOICE, *d.audio_format(voices), segs=voices)   # 指明用这些配音片段：成片放进草稿后配音轨是静音的，照样要能重新对齐
     with open(OUT_SUBS, 'w', encoding='utf-8', newline='') as f:
         f.write(tts_align.to_srt(texts, [(a / US, (a + n) / US) for a, n in cues]))
     print(f'字幕 {len(subs)} 条，配音 {len(voices)} 段，一一对上，配音还是一段一段的')
@@ -157,9 +158,24 @@ def tts_in_draft():
     print(f'已生成：{OUT_VOICE}\n已生成：{OUT_SUBS}')
 
 
+def sync_subs(d, subs, want):
+    """草稿字幕 subs 的起止改成和成片用的字幕 want（tts_align.read_srt 读的，条数要一样）一样，只改时间、不改字：
+    视频比配音长的稿，成片里的字幕往后挪过，草稿里的还是没挪的；返回 (改了几条, 字对不上的条号)"""
+    moved, diff = 0, []
+    for i, (s, (a, b, text)) in enumerate(zip(subs, want), 1):
+        start, dur = round(a * US), round(b * US) - round(a * US)
+        s0, d0 = jydraft.tr(s)
+        if abs(s0 - start) > SUB_TOL or abs(d0 - dur) > SUB_TOL:
+            s['target_timerange'] = {'start': start, 'duration': dur}
+            moved += 1
+        if flat(d.text(s)) != flat(text):
+            diff.append(i)
+    return moved, diff
+
+
 def video_in():
-    """菜单 7（能加解密时）：工作目录顶层最新的无字幕成片放进配音草稿的视频轨、从 0 秒开始，配音轨静音；
-    视频轨上放着这条视频的旧版成片就换掉"""
+    """菜单 7（能加解密时）：先备份草稿，工作目录顶层最新的无字幕成片放进配音草稿的视频轨、从 0 秒开始，配音轨静音；
+    视频轨上放着这条视频的旧版成片就换掉；草稿字幕的起止再按成片用的字幕（当前稿 project.json 的 subs）核对，对不上的改成一样"""
     read_check()
     jydraft.ensure_closed()
     vids = [f for f in top_files(('.mp4',)) if VIDEO_RE.fullmatch(f)]
@@ -167,12 +183,25 @@ def video_in():
         raise SystemExit('工作目录顶层没有无字幕成片（<片名>_<序号>.mp4）')
     video = max(vids, key=lambda f: os.path.getmtime(os.path.join(WORK, f)))
     stem = VIDEO_RE.fullmatch(video).group(1)
+    srt = final_subs()
     root = jydraft.draft_root()
     name = pick_voice_draft(root)
+    bname, replaced = jydraft.backup(root, name, BACKUP_TAG)
+    print(f'原草稿已备份成「{bname}」' + ('（换掉了上次的备份）' if replaced else ''))
     d = jydraft.Draft(os.path.join(root, name))
     dur = jydraft.put_video(d, os.path.join(WORK, video), re.compile(rf'{re.escape(stem)}_\d+\.mp4', re.I))
+    subs, want = d.segments('text'), tts_align.read_srt(srt) if srt else []
+    res = sync_subs(d, subs, want) if want and len(want) == len(subs) else None
     d.save()
     print(f'成片 {video}（{dur:.1f} 秒）已放进草稿「{name}」的视频轨、从 0 秒开始；音频轨已静音')
+    if not want:
+        print('当前稿没有字幕，草稿里的字幕没动')
+    elif res is None:
+        print(f'草稿字幕 {len(subs)} 条，成片用的字幕 {len(want)} 条（{srt}），条数对不上，草稿字幕没动：要照成片用的字幕核对')
+    else:
+        print(f'草稿字幕的起止按成片用的字幕（{srt}）改了 {res[0]} 条' if res[0] else '草稿字幕的起止和成片用的字幕一样，没改')
+        if res[1]:
+            print(f'字对不上的：第 {"、".join(map(str, res[1]))} 条（草稿里的字没改）')
 
 
 def check_install():
@@ -195,7 +224,7 @@ def main():
           '5. 检查能不能直接读写剪映草稿（加解密）\n'
           '6. 文本朗读配音在草稿里直接对齐：先备份草稿，删掉段与段之间的空白、字幕跟着配音，出 工程文件/配音.wav、字幕.srt；'
           '和初版 SRT 比，列出用户在剪映里改了哪些字幕\n'
-          '7. 成片放进剪映草稿：最新的无字幕成片放进配音草稿的视频轨、从 0 秒开始，配音轨静音\n'
+          '7. 成片放进剪映草稿：先备份草稿，最新的无字幕成片放进配音草稿的视频轨、从 0 秒开始，配音轨静音；草稿字幕的起止按成片用的字幕核对\n'
           '9. （A2）工程文件/ 里剪映导出的字幕和初版 SRT 比，列出用户在剪映里改了哪些字幕')
     ch = ask('请选择: ')
     if ch in ('1', '2'):
@@ -203,10 +232,9 @@ def main():
         make_draft(srt, w, h, pick_top(AUDIO_EXT, '配音文件') if ch == '2' else None)
     else:
         fn = {'3': tts_fix, '4': import_back, '5': check_crypto, '6': tts_in_draft, '7': video_in, '8': check_install, '9': a2_check}.get(ch)
-        if fn:
-            fn()
-        else:
-            print('无效选择')
+        if not fn:
+            raise SystemExit('编号无效')                          # 输错编号不能打印【结束】，免得被当成这一步跑成了
+        fn()
 
 
 def run():

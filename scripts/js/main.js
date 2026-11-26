@@ -60,11 +60,10 @@ async function boot() {
   DUR = TL.duration - CUTS.reduce((s, [a, b]) => s + b - a, 0);
   if (TL.subs) parseSRT(await (await fetch(BASE + TL.subs)).text());   // 无字幕项目（如宣传片）可不配
   await Promise.all(Object.entries(TL.images || {}).map(async ([k, f]) => { IMG[k] = await loadImg(BASE + f); }));
-  for (const [fam, f] of Object.entries(TL.fonts || {})) {            // 项目自带字体文件：{字体名: 相对路径}
-    const ff = new FontFace(fam, `url("${BASE + f}")`);
-    document.fonts.add(await ff.load());
-  }
-  for (const fl of TL.fontLoads || []) await document.fonts.load(fl, '字');   // 项目要用的系统字体（CSS font 写法）
+  if (TL.fonts) throw new Error('project.json 不能填 fonts（自带字体文件）：字体只用思源黑体、思源宋体，要用的字重、字号写进 fontLoads');
+  const other = (TL.fontLoads || []).filter(fl => !/Noto (Sans|Serif) SC/.test(fl));   // 字体只用思源黑体、思源宋体
+  if (other.length) throw new Error(`project.json 的 fontLoads 里有别的字体：${other.join('、')}（只能是 Noto Sans SC、Noto Serif SC）`);
+  for (const fl of TL.fontLoads || []) await document.fonts.load(fl, '字');   // 项目要用的字重、字号（CSS font 写法）
   for (const wgt of [500, 600, 700, 800, 900]) await document.fonts.load(`${wgt} 60px "Noto Sans SC"`, '字');
   const lack = ['Noto Sans SC', 'Noto Serif SC'].filter(f => !hasFont(f));   // 没装时画布会悄悄换成别的字体，直接报错
   if (lack.length) throw new Error(`系统缺少字体 ${lack.join('、')}：思源黑体、思源宋体要装 Google 的 Noto 版（Adobe 版名叫 Source Han，认不到）`);
